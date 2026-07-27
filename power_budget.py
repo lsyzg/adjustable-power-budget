@@ -1,10 +1,5 @@
 import math
 
-# constants
-Q_ELECTRON = 1.602176634e-19
-H_PLANCK = 6.62607015e-34
-C_LIGHT = 2.99792458e8
-
 # conversions
 def dbm_to_mw(p_dbm):
     return 10 ** (p_dbm / 10)
@@ -20,9 +15,6 @@ def propagation_loss_db(alpha_db_per_cm, length_um):
     length_cm = length_um * 1e-4
     return alpha_db_per_cm * length_cm
 
-def total_propagation_loss_db(segments):
-    return sum(propagation_loss_db(alpha, length_um) for alpha, length_um in segments)
-
 # mmi
 def mmi_split_loss_db(n_ports):
     return 10 * math.log10(n_ports)
@@ -36,13 +28,6 @@ def er_power_penalty_db(er_db):
     return -10 * math.log10((er_linear + 1) / (er_linear - 1))
 
 # photodetector
-def qe_from_responsivity(responsivity_a_per_w, wavelength_nm):
-    wavelength_m = wavelength_nm * 1e-9
-    return (responsivity_a_per_w * H_PLANCK * C_LIGHT) / (Q_ELECTRON * wavelength_m)
-
-def qe_penalty_db(eta_qe):
-    return -10 * math.log10(eta_qe)
-
 def pd_metrics(responsivity_a_per_w, p_pd_dbm):
     p_pd_w = dbm_to_mw(p_pd_dbm) * 1e-3
     photocurrent_a = responsivity_a_per_w * p_pd_w

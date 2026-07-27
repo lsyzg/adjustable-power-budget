@@ -15,7 +15,7 @@ class PowerBudgetGUI:
         self.root = root
         self.root.title("MMI Power Budget Calculator")
 
-        self.mod_efficiency_mode = tk.StringVar(value="Capacitive (CV^2)")
+        self.mod_efficiency_mode = tk.StringVar(value="Capacitive")
         self.include_out_coupler = tk.BooleanVar(value=True)
         self._row_widgets = {}
 
@@ -44,8 +44,14 @@ class PowerBudgetGUI:
 
         self._build_inputs()
 
-        calc_btn = ttk.Button(container, text="Calculate", command=self.calculate)
-        calc_btn.grid(row=1, column=0, columnspan=2, pady=10)
+        button_row = ttk.Frame(container)
+        button_row.grid(row=1, column=0, columnspan=2, pady=10)
+        ttk.Button(button_row, text="Calculate", command=self.calculate).grid(
+            row=0, column=0, padx=(0, 6)
+        )
+        ttk.Button(button_row, text="Snapshot results", command=self._snapshot_results).grid(
+            row=0, column=1
+        )
 
     # ------------------------------------------------------------------
     # Input construction
@@ -82,9 +88,6 @@ class PowerBudgetGUI:
             row=0, column=0, columnspan=2, sticky="w"
         )
 
-        ttk.Label(parent, text="Power budget (stage → dBm)").grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(8, 2)
-        )
         self.budget_tree = ttk.Treeview(
             parent, columns=("stage", "power"), show="headings", height=8
         )
@@ -108,8 +111,6 @@ class PowerBudgetGUI:
         row += 1
         self.v_power_budget = self._add_output_row(parent, row, "Power budget (dB):")
         row += 1
-        self.v_qe_penalty = self._add_output_row(parent, row, "Quantum efficiency penalty (dB):")
-        row += 1
         self.v_photocurrent = self._add_output_row(parent, row, "Photocurrent (uA):")
         row += 1
         self.v_mod_eff = self._add_output_row(parent, row, "Modulation efficiency (pJ/bit):")
@@ -128,8 +129,6 @@ class PowerBudgetGUI:
         row = self._add_section(row, "Laser")
         self.v_p_laser = self._add_field(row, "Laser power (dBm):", "10")
         row += 1
-        self.v_wavelength = self._add_field(row, "Wavelength (nm):", "1310")
-        row += 1
 
         row = self._add_section(row, "Edge coupler")
         self.v_l_in = self._add_field(row, "Loss in (dB):", "1.7")
@@ -146,29 +145,29 @@ class PowerBudgetGUI:
         row += 1
 
         row = self._add_section(row, "Waveguide")
-        self.v_alpha = self._add_field(row, "alpha (dB/cm):", "2.0")
+        self.v_alpha = self._add_field(row, "α (dB/cm):", "2.0")
         row += 1
-        self.v_length1 = self._add_field(row, "Length before MMI (um):", "5000")
+        self.v_length1 = self._add_field(row, "Length before MMI (um):", "5")
         row += 1
-        self.v_length2 = self._add_field(row, "Length after MMI (um):", "5000")
+        self.v_length2 = self._add_field(row, "Length after MMI (um):", "5")
         row += 1
 
-        row = self._add_section(row, "MMI (1xN)")
-        self.v_n_ports = self._add_field(row, "Number of output ports N:", "2")
+        row = self._add_section(row, "MMI")
+        self.v_n_ports = self._add_field(row, "# output ports:", "2")
         row += 1
         self.v_mmi_excess = self._add_field(row, "Excess loss (dB):", "0.3")
         row += 1
 
-        row = self._add_section(row, "Modulator (inline on post-MMI waveguide)")
+        row = self._add_section(row, "Modulator")
         self.v_mod_length = self._add_field(row, "Length (um):", "500")
         row += 1
-        self.v_mod_er = self._add_field(row, "Extinction ratio ER (dB):", "6.0")
+        self.v_mod_er = self._add_field(row, "Extinction ratio (dB):", "6.0")
         row += 1
 
         row = self._add_section(row, "Photodetector")
-        self.v_responsivity = self._add_field(row, "Responsivity R (A/W):", "0.9")
+        self.v_responsivity = self._add_field(row, "Responsivity (A/W):", "0.9")
         row += 1
-        self.v_sensitivity = self._add_field(row, "Receiver sensitivity (dBm):", "-20")
+        self.v_sensitivity = self._add_field(row, "Sensitivity (dBm):", "-20")
         row += 1
 
         row = self._add_section(row, "Modulation efficiency")
@@ -177,16 +176,16 @@ class PowerBudgetGUI:
         self._track(row, mode_label)
         mode_menu = ttk.OptionMenu(
             f, self.mod_efficiency_mode, self.mod_efficiency_mode.get(),
-            "Capacitive (CV^2)", "Power-based",
+            "Capacitive", "Power",
             command=lambda _=None: self._refresh_mod_eff_fields()
         )
         mode_menu.grid(row=row, column=1, sticky="e")
         self._track(row, mode_menu)
         row += 1
         self.mod_cap_row_start = row
-        self.v_cap_fF = self._add_field(row, "Capacitance C (fF):", "50")
+        self.v_cap_fF = self._add_field(row, "Capacitance (fF):", "50")
         row += 1
-        self.v_vpp = self._add_field(row, "Drive swing Vpp (V):", "2.0")
+        self.v_vpp = self._add_field(row, "Drive swing (V):", "2.0")
         row += 1
         self.mod_cap_row_end = row
         self.v_p_drive = self._add_field(row, "Drive power (W):", "0.01")
@@ -207,7 +206,7 @@ class PowerBudgetGUI:
                     widget.grid_remove()
 
     def _refresh_mod_eff_fields(self):
-        capacitive = self.mod_efficiency_mode.get() == "Capacitive (CV^2)"
+        capacitive = self.mod_efficiency_mode.get() == "Capacitive"
         self._set_rows_visible(self.mod_cap_row_start, self.mod_cap_row_end, capacitive)
         self._set_rows_visible(self.mod_cap_row_end, self.mod_power_row_end, not capacitive)
 
@@ -219,12 +218,49 @@ class PowerBudgetGUI:
     # Calculation
     # ------------------------------------------------------------------
 
+    def _snapshot_results(self):
+        popup = tk.Toplevel(self.root)
+        popup.title("Results snapshot")
+        popup.minsize(360, 300)
+
+        frame = ttk.Frame(popup, padding=10)
+        frame.grid(row=0, column=0, sticky="nsew")
+        popup.columnconfigure(0, weight=1)
+        popup.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        ttk.Label(frame, text="Results", font=("", 10, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w"
+        )
+        tree = ttk.Treeview(frame, columns=("stage", "power"), show="headings", height=8)
+        tree.heading("stage", text="Stage")
+        tree.heading("power", text="Power (dBm)")
+        tree.column("stage", width=230, anchor="w", stretch=True)
+        tree.column("power", width=120, anchor="e", stretch=True)
+        for item in self.budget_tree.get_children():
+            tree.insert("", tk.END, values=self.budget_tree.item(item)["values"])
+        tree.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(2, 10))
+
+        summary = [
+            ("Output power (dBm):", self.v_out_power.get()),
+            ("Total loss (dB):", self.v_total_loss.get()),
+            ("Available power (dB):", self.v_available_power.get()),
+            ("Power budget (dB):", self.v_power_budget.get()),
+            ("Photocurrent (uA):", self.v_photocurrent.get()),
+            ("Modulation efficiency (pJ/bit):", self.v_mod_eff.get()),
+        ]
+        row = 2
+        for label, value in summary:
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w")
+            ttk.Label(frame, text=value).grid(row=row, column=1, sticky="e", padx=(12, 0))
+            row += 1
+
     def _clear_results(self, *args):
         for item in self.budget_tree.get_children():
             self.budget_tree.delete(item)
-        for var in (self.v_out_power, self.v_total_loss, self.v_qe_penalty,
-                    self.v_photocurrent, self.v_mod_eff, self.v_available_power,
-                    self.v_power_budget):
+        for var in (self.v_out_power, self.v_total_loss, self.v_photocurrent,
+                    self.v_mod_eff, self.v_available_power, self.v_power_budget):
             var.set("—")
         self.error_var.set("")
 
@@ -236,7 +272,7 @@ class PowerBudgetGUI:
             self.error_var.set(f"Input error: {exc}")
         except ZeroDivisionError:
             self.error_var.set(
-                "Input error: division by zero (check ER, C, alpha/length, or bit rate values)"
+                "Input error: division by zero (check ER, C, α/length, or bit rate values)"
             )
 
     def _f(self, var):
@@ -270,14 +306,11 @@ class PowerBudgetGUI:
         )
 
         responsivity = self._f(self.v_responsivity)
-        wavelength_nm = self._f(self.v_wavelength)
-        eta_qe = pb.qe_from_responsivity(responsivity, wavelength_nm)
-        qe_penalty = pb.qe_penalty_db(eta_qe)
 
         p_pd_dbm = stages[-2][1]  # power at photodetector, before the total-loss entry
         photocurrent = pb.pd_metrics(responsivity, p_pd_dbm)
 
-        if self.mod_efficiency_mode.get() == "Capacitive (CV^2)":
+        if self.mod_efficiency_mode.get() == "Capacitive":
             e_bit_pJ = pb.modulation_efficiency_capacitive_pJ(self._f(self.v_cap_fF), self._f(self.v_vpp))
         else:
             e_bit_pJ = pb.modulation_efficiency_power_pJ(self._f(self.v_p_drive), self._f(self.v_bit_rate))
@@ -289,7 +322,6 @@ class PowerBudgetGUI:
 
         self.v_out_power.set(f"{p_pd_dbm:.3f}")
         self.v_total_loss.set(f"{total_loss:.3f}")
-        self.v_qe_penalty.set(f"{qe_penalty:.4f}")
         self.v_photocurrent.set(f"{photocurrent * 1e6:.4f}")
         self.v_mod_eff.set(f"{e_bit_pJ:.4f}")
 
