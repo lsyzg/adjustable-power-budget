@@ -7,13 +7,33 @@ input widgets, layout, and displaying results.
 import tkinter as tk
 from tkinter import ttk
 
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+
 import power_budget as pb
+
+# (display label, params-dict key) for parameters that feed the optical
+# cascade — these are the only ones worth sweeping against Output power /
+# Transmission, since the rest (responsivity, drive params, etc.) don't
+# affect those two curves at all.
+SWEEP_PARAMS = [
+    ("Laser power (dBm)", "p_laser"),
+    ("Edge coupler loss in (dB)", "l_in"),
+    ("Edge coupler loss out (dB)", "l_out"),
+    ("Waveguide α (dB/cm)", "alpha"),
+    ("Waveguide length before MMI (um)", "length1"),
+    ("Waveguide length after MMI (um)", "length2"),
+    ("MMI # output ports", "n_ports"),
+    ("MMI excess loss (dB)", "mmi_excess"),
+    ("Modulator length (um)", "mod_length"),
+    ("Modulator ER (dB)", "mod_er"),
+]
 
 
 class PowerBudgetGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("MMI Power Budget Calculator")
+        self.root.title("MMI Modulation Power Calculator")
 
         self.mod_efficiency_mode = tk.StringVar(value="Capacitive")
         self.include_out_coupler = tk.BooleanVar(value=True)
@@ -50,7 +70,10 @@ class PowerBudgetGUI:
             row=0, column=0, padx=(0, 6)
         )
         ttk.Button(button_row, text="Snapshot results", command=self._snapshot_results).grid(
-            row=0, column=1
+            row=0, column=1, padx=(6, 6)
+        )
+        ttk.Button(button_row, text="Parameter sweep", command=self._open_sweep_window).grid(
+            row=0, column=2
         )
 
     # ------------------------------------------------------------------
@@ -183,7 +206,7 @@ class PowerBudgetGUI:
         self._track(row, mode_menu)
         row += 1
         self.mod_cap_row_start = row
-        self.v_cap_fF = self._add_field(row, "Capacitance (fF):", "50")
+        self.v_cap_per_um = self._add_field(row, "Capacitance density (fF/um):", "0.1")
         row += 1
         self.v_vpp = self._add_field(row, "Drive swing (V):", "2.0")
         row += 1
@@ -256,6 +279,134 @@ class PowerBudgetGUI:
             ttk.Label(frame, text=value).grid(row=row, column=1, sticky="e", padx=(12, 0))
             row += 1
 
+    def _open_sweep_window(self):
+        popup = tk.Toplevel(self.root)
+        popup.title("Parameter sweep")
+        popup.minsize(640, 520)
+
+        frame = ttk.Frame(popup, padding=10)
+        frame.grid(row=0, column=0, sticky="nsew")
+        popup.columnconfigure(0, weight=1)
+        popup.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(2, weight=1)
+
+        param_labels = [label for label, _key in SWEEP_PARAMS]
+        key_by_label = dict(SWEEP_PARAMS)
+
+        controls = ttk.Frame(frame)
+        controls.grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        param_var = tk.StringVar(value=param_labels[0])
+        ttk.Label(controls, text="Parameter:").grid(row=0, column=0, sticky="w")
+        ttk.OptionMenu(controls, param_var, param_var.get(), *param_labels).grid(
+            row=0, column=1, padx=(4, 16)
+        )
+
+        ttk.Label(controls, text="Start:").grid(row=0, column=2, sticky="w")
+        start_var = tk.StringVar()
+        ttk.Entry(controls, textvariable=start_var, width=10).grid(row=0, column=3, padx=(4, 16))
+
+        ttk.Label(controls, text="Stop:").grid(row=0, column=4, sticky="w")
+        stop_var = tk.StringVar()
+        ttk.Entry(controls, textvariable=stop_var, width=10).grid(row=0, column=5, padx=(4, 16))
+
+        ttk.Label(controls, text="Points:").grid(row=0, column=6, sticky="w")
+        points_var = tk.StringVar(value="21")
+        ttk.Entry(controls, textvariable=points_var, width=6).grid(row=0, column=7, padx=(4, 16))
+
+        ttk.Label(controls, text="Y-axis:").grid(row=0, column=8, sticky="w")
+        units_var = tk.StringVar(value="dB")
+        ttk.OptionMenu(controls, units_var, units_var.get(), "dB", "Linear",
+                       command=lambda _=None: redraw()).grid(row=0, column=9, padx=(4, 16))
+
+        error_var = tk.StringVar(value="")
+        ttk.Label(frame, textvariable=error_var, foreground="red").grid(
+            row=1, column=0, sticky="w"
+        )
+
+        fig = Figure(figsize=(6, 4.5), dpi=100)
+        ax1 = fig.add_subplot(111)
+        ax2 = ax1.twinx()
+        canvas = FigureCanvasTkAgg(fig, master=frame)
+        canvas.get_tk_widget().grid(row=2, column=0, sticky="nsew")
+
+        def prefill_range(*_args):
+            try:
+                current = self._current_params()[key_by_label[param_var.get()]]
+            except (tk.TclError, ValueError):
+                return
+            span = abs(current) * 0.5 if current != 0 else 1.0
+            start_var.set(f"{current - span:.4g}")
+            stop_var.set(f"{current + span:.4g}")
+
+        param_var.trace_add("write", prefill_range)
+        prefill_range()
+
+        last_data = {"xs": None, "p_pd_dbm": None, "total_loss": None}
+
+        def redraw():
+            if last_data["xs"] is None:
+                return
+            xs = last_data["xs"]
+            if units_var.get() == "dB":
+                out_vals = last_data["p_pd_dbm"]
+                trans_vals = [-tl for tl in last_data["total_loss"]]
+                out_label, trans_label = "Output power (dBm)", "Transmission (dB)"
+            else:
+                out_vals = [pb.dbm_to_mw(v) for v in last_data["p_pd_dbm"]]
+                trans_vals = [pb.db_to_linear(tl) for tl in last_data["total_loss"]]
+                out_label, trans_label = "Output power (mW)", "Transmission (linear)"
+
+            ax1.clear()
+            ax2.clear()
+            ax1.plot(xs, out_vals, color="tab:blue", marker="o", markersize=3, label=out_label)
+            ax2.plot(xs, trans_vals, color="tab:red", marker="s", markersize=3, label=trans_label)
+            ax1.set_xlabel(param_var.get())
+            ax1.set_ylabel(out_label, color="tab:blue")
+            ax2.set_ylabel(trans_label, color="tab:red", labelpad=14)
+            ax1.tick_params(axis="y", labelcolor="tab:blue")
+            ax2.tick_params(axis="y", labelcolor="tab:red")
+            ax1.grid(True, alpha=0.3)
+            fig.tight_layout()
+            fig.subplots_adjust(right=0.85)
+            canvas.draw()
+
+        def run_sweep():
+            error_var.set("")
+            try:
+                key = key_by_label[param_var.get()]
+                start = float(start_var.get())
+                stop = float(stop_var.get())
+                n_points = int(points_var.get())
+                if n_points < 2:
+                    raise ValueError("Points must be >= 2")
+
+                base_params = self._current_params()
+                step = (stop - start) / (n_points - 1)
+                xs = [start + i * step for i in range(n_points)]
+                p_pd_dbm_vals = []
+                total_loss_vals = []
+                for x in xs:
+                    params = dict(base_params)
+                    params[key] = x
+                    result = self._compute(params)
+                    p_pd_dbm_vals.append(result["p_pd_dbm"])
+                    total_loss_vals.append(result["total_loss"])
+            except (tk.TclError, ValueError) as exc:
+                error_var.set(f"Input error: {exc}")
+                return
+            except ZeroDivisionError:
+                error_var.set("Input error: division by zero for this sweep range")
+                return
+
+            last_data["xs"] = xs
+            last_data["p_pd_dbm"] = p_pd_dbm_vals
+            last_data["total_loss"] = total_loss_vals
+            redraw()
+
+        ttk.Button(controls, text="Run sweep", command=run_sweep).grid(row=0, column=10, padx=(8, 0))
+
     def _clear_results(self, *args):
         for item in self.budget_tree.get_children():
             self.budget_tree.delete(item)
@@ -278,59 +429,76 @@ class PowerBudgetGUI:
     def _f(self, var):
         return float(var.get())
 
-    def _run_calculation(self):
-        p_laser = self._f(self.v_p_laser)
+    def _current_params(self):
+        return {
+            "p_laser": self._f(self.v_p_laser),
+            "l_in": self._f(self.v_l_in),
+            "l_out": self._f(self.v_l_out) if self.include_out_coupler.get() else 0.0,
+            "alpha": self._f(self.v_alpha),
+            "length1": self._f(self.v_length1),
+            "length2": self._f(self.v_length2),
+            "n_ports": self._f(self.v_n_ports),
+            "mmi_excess": self._f(self.v_mmi_excess),
+            "mod_length": self._f(self.v_mod_length),
+            "mod_er": self._f(self.v_mod_er),
+            "responsivity": self._f(self.v_responsivity),
+            "sensitivity": self._f(self.v_sensitivity),
+            "mod_mode": self.mod_efficiency_mode.get(),
+            "cap_per_um": self._f(self.v_cap_per_um),
+            "vpp": self._f(self.v_vpp),
+            "p_drive": self._f(self.v_p_drive),
+            "bit_rate": self._f(self.v_bit_rate),
+        }
 
-        l_in = self._f(self.v_l_in)
+    def _compute(self, p):
+        """Pure calculation from a params dict -> result dict. No widget access,
+        so this can be reused for both the normal Calculate button and sweeps."""
+        l_prop1 = pb.propagation_loss_db(p["alpha"], p["length1"])
+        l_mmi = pb.mmi_total_loss_db(p["n_ports"], p["mmi_excess"])
+        l_prop2 = pb.propagation_loss_db(p["alpha"], p["length2"])
+        l_mod_il = pb.propagation_loss_db(p["alpha"], p["mod_length"])
+        l_er_penalty = pb.er_power_penalty_db(p["mod_er"])
 
-        alpha = self._f(self.v_alpha)
-        length1 = self._f(self.v_length1)
-        l_prop1 = pb.propagation_loss_db(alpha, length1)
-
-        n_ports = self._f(self.v_n_ports)
-        mmi_excess = self._f(self.v_mmi_excess)
-        l_mmi = pb.mmi_total_loss_db(n_ports, mmi_excess)
-
-        length2 = self._f(self.v_length2)
-        l_prop2 = pb.propagation_loss_db(alpha, length2)
-
-        l_out = self._f(self.v_l_out) if self.include_out_coupler.get() else 0.0
-
-        mod_length = self._f(self.v_mod_length)
-        l_mod_il = pb.propagation_loss_db(alpha, mod_length)
-        er_db = self._f(self.v_mod_er)
-        l_er_penalty = pb.er_power_penalty_db(er_db)
-
-        stages = pb.compute_power_budget(
-            p_laser, l_in, l_prop1, l_mmi, l_prop2, l_mod_il, l_er_penalty, l_out
+        stages = pb.compute_results(
+            p["p_laser"], p["l_in"], l_prop1, l_mmi, l_prop2,
+            l_mod_il, l_er_penalty, p["l_out"]
         )
 
-        responsivity = self._f(self.v_responsivity)
-
         p_pd_dbm = stages[-2][1]  # power at photodetector, before the total-loss entry
-        photocurrent = pb.pd_metrics(responsivity, p_pd_dbm)
-
-        if self.mod_efficiency_mode.get() == "Capacitive":
-            e_bit_pJ = pb.modulation_efficiency_capacitive_pJ(self._f(self.v_cap_fF), self._f(self.v_vpp))
-        else:
-            e_bit_pJ = pb.modulation_efficiency_power_pJ(self._f(self.v_p_drive), self._f(self.v_bit_rate))
-
         total_loss = stages[-1][1]
+        photocurrent = pb.pd_metrics(p["responsivity"], p_pd_dbm)
 
-        for name, value in stages[:-1]:
+        if p["mod_mode"] == "Capacitive":
+            cap_fF = pb.capacitance_fF(p["cap_per_um"], p["mod_length"])
+            e_bit_pJ = pb.modulation_efficiency_capacitive_pJ(cap_fF, p["vpp"])
+        else:
+            e_bit_pJ = pb.modulation_efficiency_power_pJ(p["p_drive"], p["bit_rate"])
+
+        available = pb.available_power_db(p["p_laser"], p["sensitivity"])
+        power_budget = pb.power_budget_db(p["p_laser"], p["sensitivity"], total_loss)
+
+        return {
+            "stages": stages,
+            "p_pd_dbm": p_pd_dbm,
+            "total_loss": total_loss,
+            "photocurrent": photocurrent,
+            "e_bit_pJ": e_bit_pJ,
+            "available": available,
+            "power_budget": power_budget,
+        }
+
+    def _run_calculation(self):
+        result = self._compute(self._current_params())
+
+        for name, value in result["stages"][:-1]:
             self.budget_tree.insert("", tk.END, values=(name, f"{value:.3f}"))
 
-        self.v_out_power.set(f"{p_pd_dbm:.3f}")
-        self.v_total_loss.set(f"{total_loss:.3f}")
-        self.v_photocurrent.set(f"{photocurrent * 1e6:.4f}")
-        self.v_mod_eff.set(f"{e_bit_pJ:.4f}")
-
-        p_sensitivity = self._f(self.v_sensitivity)
-        available = pb.available_power_db(p_laser, p_sensitivity)
-        power_budget = pb.power_budget_db(p_laser, p_sensitivity, total_loss)
-
-        self.v_available_power.set(f"{available:.3f}")
-        self.v_power_budget.set(f"{power_budget:.3f}")
+        self.v_out_power.set(f"{result['p_pd_dbm']:.3f}")
+        self.v_total_loss.set(f"{result['total_loss']:.3f}")
+        self.v_photocurrent.set(f"{result['photocurrent'] * 1e6:.4f}")
+        self.v_mod_eff.set(f"{result['e_bit_pJ']:.4f}")
+        self.v_available_power.set(f"{result['available']:.3f}")
+        self.v_power_budget.set(f"{result['power_budget']:.3f}")
 
 
 def main():
