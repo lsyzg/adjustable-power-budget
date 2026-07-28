@@ -320,6 +320,17 @@ class PowerBudgetGUI:
         ttk.OptionMenu(controls, units_var, units_var.get(), "dB", "Linear",
                        command=lambda _=None: redraw()).grid(row=0, column=9, padx=(4, 16))
 
+        show_out_var = tk.BooleanVar(value=True)
+        show_trans_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(controls, text="Output power", variable=show_out_var,
+                         command=lambda: redraw()).grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(6, 0)
+        )
+        ttk.Checkbutton(controls, text="Transmission", variable=show_trans_var,
+                         command=lambda: redraw()).grid(
+            row=1, column=3, columnspan=3, sticky="w", pady=(6, 0)
+        )
+
         error_var = tk.StringVar(value="")
         ttk.Label(frame, textvariable=error_var, foreground="red").grid(
             row=1, column=0, sticky="w"
@@ -360,16 +371,30 @@ class PowerBudgetGUI:
 
             ax1.clear()
             ax2.clear()
-            ax1.plot(xs, out_vals, color="tab:blue", marker="o", markersize=3, label=out_label)
-            ax2.plot(xs, trans_vals, color="tab:red", marker="s", markersize=3, label=trans_label)
+
+            if show_out_var.get():
+                ax1.plot(xs, out_vals, color="tab:blue", marker="o", markersize=3, label=out_label)
+                ax1.set_ylabel(out_label, color="tab:blue", labelpad=10)
+                ax1.tick_params(axis="y", labelcolor="tab:blue")
+                ax1.yaxis.set_visible(True)
+            else:
+                ax1.yaxis.set_visible(False)
+
+            if show_trans_var.get():
+                ax2.plot(xs, trans_vals, color="tab:red", marker="s", markersize=3, label=trans_label)
+                ax2.yaxis.set_label_position("right")
+                ax2.set_ylabel(trans_label, color="tab:red", labelpad=18)
+                ax2.tick_params(axis="y", labelcolor="tab:red")
+                ax2.yaxis.set_visible(True)
+            else:
+                ax2.yaxis.set_visible(False)
+
             ax1.set_xlabel(param_var.get())
-            ax1.set_ylabel(out_label, color="tab:blue")
-            ax2.set_ylabel(trans_label, color="tab:red", labelpad=14)
-            ax1.tick_params(axis="y", labelcolor="tab:blue")
-            ax2.tick_params(axis="y", labelcolor="tab:red")
             ax1.grid(True, alpha=0.3)
-            fig.tight_layout()
-            fig.subplots_adjust(right=0.85)
+            # Fixed fractional margins instead of tight_layout(): reserved space
+            # for both twin-axis labels stays valid at any window size, so
+            # nothing gets clipped regardless of how the popup is resized.
+            fig.subplots_adjust(left=0.16, right=0.82, bottom=0.12, top=0.95)
             canvas.draw()
 
         def run_sweep():
