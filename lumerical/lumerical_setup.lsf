@@ -41,4 +41,6 @@ function get_imag(){
 
 neff_imag = get_imag();
 alpha_db_per_m = (4 * pi * neff_imag / wavelength) * 10 * log10(exp(1));
-alpha_db_per_m / 100;
+alpha_db_per_cm = alpha_db_per_m / 100;
+
+?alpha_db_per_cm
