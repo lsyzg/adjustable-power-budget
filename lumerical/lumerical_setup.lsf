@@ -2,6 +2,8 @@ switchtolayout;
 selectall;
 delete;
 
+wavelength = 1.55e-6;
+
 addrect;
 set('name', 'waveguide');
 set('x span', 4.8e-7);
@@ -28,7 +30,7 @@ set('x min bc', 'PML');
 set('x max bc', 'PML');
 set('y min bc', 'PML');
 set('y max bc', 'PML');
-set('wavelength', 1.55e-6);
+set('wavelength', wavelength);
 
 function get_imag(){
     findmodes;
@@ -37,3 +39,6 @@ function get_imag(){
     return imag(neff_complex);
 }
 
+neff_imag = get_imag();
+alpha_db_per_m = (4 * pi * neff_imag / wavelength) * 10 * log10(exp(1));
+alpha_db_per_m / 100;
