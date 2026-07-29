@@ -8,14 +8,36 @@ sys.path.append(os.path.dirname(__file__))
 
 import lumapi, lumopt
 
-WAVELENGTH_M = 1.55e-6
+TARGET_ALPHA_DB_PER_CM = 2.0
 
 mode = lumapi.MODE()
 mode.eval(open('lumerical_setup.lsf').read())
-neff_imag = mode.get_imag()
 
-alpha_db_per_m = (4 * math.pi * neff_imag / WAVELENGTH_M) * 10 * math.log10(math.e)
-alpha_db_per_cm = alpha_db_per_m / 100
+def linspace(start, stop, n):
+    if n <= 1:
+        return [start]
+    step = (stop - start) / (n - 1)
+    return [start + i * step for i in range(n)]
 
-print(f"neff_imag = {neff_imag}")
-print(f"alpha = {alpha_db_per_cm} dB/cm")
+
+def alpha_for_dimensions(x_span_m, y_span_m):
+    mode.switchtolayout()
+    mode.setnamed('waveguide', 'x span', x_span_m)
+    mode.setnamed('waveguide', 'y span', y_span_m)
+    return mode.get_alpha()
+
+
+x_spans = linspace(3e-7, 7e-7, 9)
+y_spans = linspace(1.5e-7, 3e-7, 7) 
+
+best = None
+for x_span in x_spans:
+    for y_span in y_spans:
+        alpha = alpha_for_dimensions(x_span, y_span)
+        error = abs(alpha - TARGET_ALPHA_DB_PER_CM)
+        if best is None or error < best["error"]:
+            best = {"x_span": x_span, "y_span": y_span, "alpha": alpha, "error": error}
+
+print(f"target alpha = {TARGET_ALPHA_DB_PER_CM} dB/cm")
+print(f"closest match: x span = {best['x_span'] * 1e9:.1f} nm, "
+      f"y span = {best['y_span'] * 1e9:.1f} nm, alpha = {best['alpha']:.4f} dB/cm")
