@@ -38,6 +38,6 @@ for x_span in x_spans:
         if best is None or error < best["error"]:
             best = {"x_span": x_span, "y_span": y_span, "alpha": alpha, "error": error}
 
-print(f"target alpha = {TARGET_ALPHA_DB_PER_CM} dB/cm")
+print(f"target alpha: {TARGET_ALPHA_DB_PER_CM} dB/cm")
 print(f"closest match: x span = {best['x_span'] * 1e9:.1f} nm, "
       f"y span = {best['y_span'] * 1e9:.1f} nm, alpha = {best['alpha']:.4f} dB/cm")

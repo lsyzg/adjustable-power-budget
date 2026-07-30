@@ -1,0 +1,82 @@
+switchtolayout;
+selectall;
+delete;
+
+wavelength = 1.55e-6;
+
+addrect;
+set('name', 'waveguide');
+set('x span', 4.8e-7);
+set('y span', 2.2e-7);
+set('z span', 10e-6);
+set('x', 0);
+set('y', 0);
+set('z', 0);
+set('material', 'Si (Silicon) - Palik');
+
+addmesh;
+set('name', 'wg_mesh');
+set('based on a structure', 1);
+set('structure', 'waveguide');
+
+addfde;
+set('background material', 'SiO2 (Glass) - Palik');
+set('x span', 5e-6);
+set('y span', 2.5e-6);
+set('x', 0);
+set('y', 0);
+set('z', 0);
+set('x min bc', 'PML');
+set('x max bc', 'PML');
+set('y min bc', 'PML');
+set('y max bc', 'PML');
+set('wavelength', wavelength);
+
+function get_imag(){
+    findmodes;
+    selectmode(1);
+    neff_complex = getdata("mode1", "neff");
+    return imag(neff_complex);
+}
+
+function get_alpha(){
+    neff_imag = get_imag();
+    alpha_db_per_m = (4 * pi * neff_imag / wavelength) * 10 * log10(exp(1));
+    return alpha_db_per_m / 100;
+}
+
+function set_waveguide_dimensions(x_span_m, y_span_m){
+    switchtolayout;
+    setnamed('waveguide', 'x span', x_span_m);
+    setnamed('waveguide', 'y span', y_span_m);
+}
+
+target_alpha_db_per_cm = 2.0;  // <- set this to the alpha you want the waveguide to hit
+
+x_spans = linspace(3e-7, 7e-7, 9);    // waveguide width sweep, 300-700 nm
+y_spans = linspace(1.5e-7, 3e-7, 7);  // waveguide height sweep, 150-300 nm
+
+best_error = 1e300;
+best_x_span = x_spans(1);
+best_y_span = y_spans(1);
+best_alpha = 0;
+
+for(i = 1:length(x_spans)){
+    for(j = 1:length(y_spans)){
+        x_span = x_spans(i);
+        y_span = y_spans(j);
+        set_waveguide_dimensions(x_span, y_span);
+        alpha = get_alpha();
+        error = abs(alpha - target_alpha_db_per_cm);
+        if(error < best_error){
+            best_error = error;
+            best_x_span = x_span;
+            best_y_span = y_span;
+            best_alpha = alpha;
+        }
+    }
+}
+
+? "target alpha = " + num2str(target_alpha_db_per_cm) + " dB/cm";
+? "closest match: x span = " + num2str(best_x_span * 1e9) + " nm, y span = "
+  + num2str(best_y_span * 1e9) + " nm, alpha = " + num2str(best_alpha) + " dB/cm";
