@@ -7,7 +7,8 @@ input widgets, layout, and displaying results.
 import tkinter as tk
 from tkinter import ttk
 
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import numpy as np
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 
 import power_budget as pb
@@ -20,13 +21,16 @@ SWEEP_PARAMS = [
     ("Laser power (dBm)", "p_laser"),
     ("Edge coupler loss in (dB)", "l_in"),
     ("Edge coupler loss out (dB)", "l_out"),
-    ("Waveguide α (dB/cm)", "alpha"),
+    ("Core width (um)", "core_width"),
+    ("Core height (um)", "core_height"),
+    ("Core bulk loss (dB/cm)", "alpha_core"),
+    ("Cladding bulk loss (dB/cm)", "alpha_clad"),
     ("Waveguide length before MMI (um)", "length1"),
     ("Waveguide length after MMI (um)", "length2"),
     ("MMI # output ports", "n_ports"),
-    ("MMI excess loss (dB)", "mmi_excess"),
+    ("MMI width (um)", "mmi_width"),
     ("Modulator length (um)", "mod_length"),
-    ("Modulator ER (dB)", "mod_er"),
+    ("Modulator splitting ratio γ", "splitting_ratio"),
 ]
 
 
@@ -37,6 +41,8 @@ class PowerBudgetGUI:
 
         self.mod_efficiency_mode = tk.StringVar(value="Capacitive")
         self.include_out_coupler = tk.BooleanVar(value=True)
+        self.mmi_access_mode = tk.StringVar(value="Direct")
+        self.mmi_length_mode = tk.StringVar(value="Derived")
         self._row_widgets = {}
 
         root.minsize(700, 500)
@@ -61,6 +67,8 @@ class PowerBudgetGUI:
 
         self.mod_efficiency_mode.trace_add("write", self._clear_results)
         self.include_out_coupler.trace_add("write", self._clear_results)
+        self.mmi_access_mode.trace_add("write", self._clear_results)
+        self.mmi_length_mode.trace_add("write", self._clear_results)
 
         self._build_inputs()
 
@@ -73,7 +81,10 @@ class PowerBudgetGUI:
             row=0, column=1, padx=(6, 6)
         )
         ttk.Button(button_row, text="Parameter sweep", command=self._open_sweep_window).grid(
-            row=0, column=2
+            row=0, column=2, padx=(6, 6)
+        )
+        ttk.Button(button_row, text="3D parameter sweep", command=self._open_3d_sweep_window).grid(
+            row=0, column=3
         )
 
     # ------------------------------------------------------------------
@@ -138,6 +149,20 @@ class PowerBudgetGUI:
         row += 1
         self.v_mod_eff = self._add_output_row(parent, row, "Modulation efficiency (pJ/bit):")
         row += 1
+        self.v_confinement = self._add_output_row(parent, row, "Confinement factor Γ:")
+        row += 1
+        self.v_n_eff = self._add_output_row(parent, row, "Effective index:")
+        row += 1
+        self.v_alpha_out = self._add_output_row(parent, row, "Derived α (dB/cm):")
+        row += 1
+        self.v_er_out = self._add_output_row(parent, row, "Derived ER (dB):")
+        row += 1
+        self.v_mmi_length_out = self._add_output_row(parent, row, "MMI length used (um):")
+        row += 1
+        self.v_mmi_excess_out = self._add_output_row(parent, row, "MMI excess loss (dB):")
+        row += 1
+        self.v_mmi_modes_out = self._add_output_row(parent, row, "MMI guided modes:")
+        row += 1
 
         self.error_var = tk.StringVar(value="")
         ttk.Label(parent, textvariable=self.error_var, foreground="red",
@@ -168,7 +193,19 @@ class PowerBudgetGUI:
         row += 1
 
         row = self._add_section(row, "Waveguide")
-        self.v_alpha = self._add_field(row, "α (dB/cm):", "2.0")
+        self.v_wavelength = self._add_field(row, "Wavelength (nm):", "1550")
+        row += 1
+        self.v_n_core = self._add_field(row, "Core index:", "3.45")
+        row += 1
+        self.v_n_clad = self._add_field(row, "Cladding index:", "1.44")
+        row += 1
+        self.v_core_width = self._add_field(row, "Core width (um):", "0.48")
+        row += 1
+        self.v_core_height = self._add_field(row, "Core height (um):", "0.22")
+        row += 1
+        self.v_alpha_core = self._add_field(row, "Core bulk loss (dB/cm):", "0.01")
+        row += 1
+        self.v_alpha_clad = self._add_field(row, "Cladding bulk loss (dB/cm):", "0.001")
         row += 1
         self.v_length1 = self._add_field(row, "Length before MMI (um):", "5")
         row += 1
@@ -178,13 +215,41 @@ class PowerBudgetGUI:
         row = self._add_section(row, "MMI")
         self.v_n_ports = self._add_field(row, "# output ports:", "2")
         row += 1
-        self.v_mmi_excess = self._add_field(row, "Excess loss (dB):", "0.3")
+        self.v_mmi_width = self._add_field(row, "Width (um):", "3.0")
         row += 1
 
-        row = self._add_section(row, "Modulator")
+        access_label = ttk.Label(f, text="Access coupling:")
+        access_label.grid(row=row, column=0, sticky="w")
+        self._track(row, access_label)
+        access_menu = ttk.OptionMenu(
+            f, self.mmi_access_mode, self.mmi_access_mode.get(),
+            "Direct", "Tapered", command=lambda _=None: self._refresh_mmi_fields()
+        )
+        access_menu.grid(row=row, column=1, sticky="e")
+        self._track(row, access_menu)
+        row += 1
+        self.mmi_taper_row = row
+        self.v_taper_width = self._add_field(row, "Taper tip width (um):", "1.0")
+        row += 1
+
+        length_mode_label = ttk.Label(f, text="Length:")
+        length_mode_label.grid(row=row, column=0, sticky="w")
+        self._track(row, length_mode_label)
+        length_menu = ttk.OptionMenu(
+            f, self.mmi_length_mode, self.mmi_length_mode.get(),
+            "Derived", "Custom", command=lambda _=None: self._refresh_mmi_fields()
+        )
+        length_menu.grid(row=row, column=1, sticky="e")
+        self._track(row, length_menu)
+        row += 1
+        self.mmi_custom_length_row = row
+        self.v_mmi_custom_length = self._add_field(row, "Custom length (um):", "10.0")
+        row += 1
+
+        row = self._add_section(row, "MZM")
         self.v_mod_length = self._add_field(row, "Length (um):", "500")
         row += 1
-        self.v_mod_er = self._add_field(row, "Extinction ratio (dB):", "6.0")
+        self.v_splitting_ratio = self._add_field(row, "Splitting ratio γ (0.5 = ideal):", "0.48")
         row += 1
 
         row = self._add_section(row, "Photodetector")
@@ -219,6 +284,7 @@ class PowerBudgetGUI:
 
         self._refresh_mod_eff_fields()
         self._refresh_out_coupler_fields()
+        self._refresh_mmi_fields()
 
     def _set_rows_visible(self, start, end, visible):
         for r in range(start, end):
@@ -236,6 +302,12 @@ class PowerBudgetGUI:
     def _refresh_out_coupler_fields(self):
         self._set_rows_visible(self.out_coupler_row, self.out_coupler_row + 1,
                                 self.include_out_coupler.get())
+
+    def _refresh_mmi_fields(self):
+        self._set_rows_visible(self.mmi_taper_row, self.mmi_taper_row + 1,
+                                self.mmi_access_mode.get() == "Tapered")
+        self._set_rows_visible(self.mmi_custom_length_row, self.mmi_custom_length_row + 1,
+                                self.mmi_length_mode.get() == "Custom")
 
     # ------------------------------------------------------------------
     # Calculation
@@ -342,6 +414,16 @@ class PowerBudgetGUI:
         canvas = FigureCanvasTkAgg(fig, master=frame)
         canvas.get_tk_widget().grid(row=2, column=0, sticky="nsew")
 
+        toolbar = NavigationToolbar2Tk(canvas, frame, pack_toolbar=False)
+        toolbar.update()
+        toolbar.grid(row=3, column=0, sticky="w")
+
+        point_label_var = tk.StringVar(value="Click a point on the graph to inspect its value.")
+        ttk.Label(frame, textvariable=point_label_var).grid(
+            row=4, column=0, sticky="w", pady=(4, 0)
+        )
+        selected_annotation = {"out": None, "trans": None}
+
         def prefill_range(*_args):
             try:
                 current = self._current_params()[key_by_label[param_var.get()]]
@@ -371,6 +453,9 @@ class PowerBudgetGUI:
 
             ax1.clear()
             ax2.clear()
+            selected_annotation["out"] = None
+            selected_annotation["trans"] = None
+            point_label_var.set("Click a point on the graph to inspect its value.")
 
             if show_out_var.get():
                 ax1.plot(xs, out_vals, color="tab:blue", marker="o", markersize=3, label=out_label)
@@ -396,6 +481,52 @@ class PowerBudgetGUI:
             # nothing gets clipped regardless of how the popup is resized.
             fig.subplots_adjust(left=0.16, right=0.82, bottom=0.12, top=0.95)
             canvas.draw()
+
+        def on_click(event):
+            if last_data["xs"] is None or event.xdata is None:
+                return
+            if event.inaxes not in (ax1, ax2):
+                return
+
+            xs = last_data["xs"]
+            idx = min(range(len(xs)), key=lambda i: abs(xs[i] - event.xdata))
+
+            for key in ("out", "trans"):
+                if selected_annotation[key] is not None:
+                    selected_annotation[key].remove()
+                    selected_annotation[key] = None
+
+            if units_var.get() == "dB":
+                out_vals = last_data["p_pd_dbm"]
+                trans_vals = [-tl for tl in last_data["total_loss"]]
+            else:
+                out_vals = [pb.dbm_to_mw(v) for v in last_data["p_pd_dbm"]]
+                trans_vals = [pb.db_to_linear(tl) for tl in last_data["total_loss"]]
+
+            summary_parts = [f"x = {xs[idx]:.4g}"]
+            if show_out_var.get():
+                y = out_vals[idx]
+                selected_annotation["out"] = ax1.annotate(
+                    f"({xs[idx]:.4g}, {y:.4g})", xy=(xs[idx], y),
+                    xytext=(10, 10), textcoords="offset points", color="tab:blue",
+                    bbox={"boxstyle": "round", "fc": "white", "ec": "tab:blue", "alpha": 0.9},
+                    arrowprops={"arrowstyle": "->", "color": "tab:blue"},
+                )
+                summary_parts.append(f"output = {y:.4g}")
+            if show_trans_var.get():
+                y = trans_vals[idx]
+                selected_annotation["trans"] = ax2.annotate(
+                    f"({xs[idx]:.4g}, {y:.4g})", xy=(xs[idx], y),
+                    xytext=(10, -20), textcoords="offset points", color="tab:red",
+                    bbox={"boxstyle": "round", "fc": "white", "ec": "tab:red", "alpha": 0.9},
+                    arrowprops={"arrowstyle": "->", "color": "tab:red"},
+                )
+                summary_parts.append(f"transmission = {y:.4g}")
+
+            point_label_var.set("Selected point: " + ", ".join(summary_parts))
+            canvas.draw_idle()
+
+        canvas.mpl_connect("button_press_event", on_click)
 
         def run_sweep():
             error_var.set("")
@@ -432,11 +563,180 @@ class PowerBudgetGUI:
 
         ttk.Button(controls, text="Run sweep", command=run_sweep).grid(row=0, column=10, padx=(8, 0))
 
+    def _open_3d_sweep_window(self):
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  registers the 3d projection
+
+        popup = tk.Toplevel(self.root)
+        popup.title("3D parameter sweep")
+        popup.minsize(700, 620)
+
+        frame = ttk.Frame(popup, padding=10)
+        frame.grid(row=0, column=0, sticky="nsew")
+        popup.columnconfigure(0, weight=1)
+        popup.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(2, weight=1)
+
+        param_labels = [label for label, _key in SWEEP_PARAMS]
+        key_by_label = dict(SWEEP_PARAMS)
+
+        controls = ttk.Frame(frame)
+        controls.grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        ttk.Label(controls, text="Param 1:").grid(row=0, column=0, sticky="w")
+        param1_var = tk.StringVar(value=param_labels[0])
+        ttk.OptionMenu(controls, param1_var, param1_var.get(), *param_labels).grid(
+            row=0, column=1, padx=(4, 12)
+        )
+        ttk.Label(controls, text="Start:").grid(row=0, column=2, sticky="w")
+        start1_var = tk.StringVar()
+        ttk.Entry(controls, textvariable=start1_var, width=8).grid(row=0, column=3, padx=(4, 8))
+        ttk.Label(controls, text="Stop:").grid(row=0, column=4, sticky="w")
+        stop1_var = tk.StringVar()
+        ttk.Entry(controls, textvariable=stop1_var, width=8).grid(row=0, column=5, padx=(4, 8))
+        ttk.Label(controls, text="Points:").grid(row=0, column=6, sticky="w")
+        points1_var = tk.StringVar(value="12")
+        ttk.Entry(controls, textvariable=points1_var, width=5).grid(row=0, column=7, padx=(4, 12))
+
+        ttk.Label(controls, text="Param 2:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        param2_var = tk.StringVar(value=param_labels[1])
+        ttk.OptionMenu(controls, param2_var, param2_var.get(), *param_labels).grid(
+            row=1, column=1, padx=(4, 12), pady=(6, 0)
+        )
+        ttk.Label(controls, text="Start:").grid(row=1, column=2, sticky="w", pady=(6, 0))
+        start2_var = tk.StringVar()
+        ttk.Entry(controls, textvariable=start2_var, width=8).grid(row=1, column=3, padx=(4, 8), pady=(6, 0))
+        ttk.Label(controls, text="Stop:").grid(row=1, column=4, sticky="w", pady=(6, 0))
+        stop2_var = tk.StringVar()
+        ttk.Entry(controls, textvariable=stop2_var, width=8).grid(row=1, column=5, padx=(4, 8), pady=(6, 0))
+        ttk.Label(controls, text="Points:").grid(row=1, column=6, sticky="w", pady=(6, 0))
+        points2_var = tk.StringVar(value="12")
+        ttk.Entry(controls, textvariable=points2_var, width=5).grid(row=1, column=7, padx=(4, 12), pady=(6, 0))
+
+        ttk.Label(controls, text="Z:").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        z_var = tk.StringVar(value="Output power")
+        ttk.OptionMenu(controls, z_var, z_var.get(), "Output power", "Transmission",
+                       command=lambda _=None: redraw()).grid(row=2, column=1, padx=(4, 12), pady=(6, 0))
+        ttk.Label(controls, text="Units:").grid(row=2, column=2, sticky="w", pady=(6, 0))
+        units_var = tk.StringVar(value="dB")
+        ttk.OptionMenu(controls, units_var, units_var.get(), "dB", "Linear",
+                       command=lambda _=None: redraw()).grid(row=2, column=3, padx=(4, 12), pady=(6, 0))
+
+        error_var = tk.StringVar(value="")
+        ttk.Label(frame, textvariable=error_var, foreground="red").grid(
+            row=1, column=0, sticky="w"
+        )
+
+        fig = Figure(figsize=(6.5, 5.5), dpi=100)
+        ax = fig.add_subplot(111, projection="3d")
+        canvas = FigureCanvasTkAgg(fig, master=frame)
+        canvas.get_tk_widget().grid(row=2, column=0, sticky="nsew")
+
+        toolbar = NavigationToolbar2Tk(canvas, frame, pack_toolbar=False)
+        toolbar.update()
+        toolbar.grid(row=3, column=0, sticky="w")
+
+        def prefill(param_var, start_var, stop_var):
+            try:
+                current = self._current_params()[key_by_label[param_var.get()]]
+            except (tk.TclError, ValueError):
+                return
+            span = abs(current) * 0.5 if current != 0 else 1.0
+            start_var.set(f"{current - span:.4g}")
+            stop_var.set(f"{current + span:.4g}")
+
+        param1_var.trace_add("write", lambda *_a: prefill(param1_var, start1_var, stop1_var))
+        param2_var.trace_add("write", lambda *_a: prefill(param2_var, start2_var, stop2_var))
+        prefill(param1_var, start1_var, stop1_var)
+        prefill(param2_var, start2_var, stop2_var)
+
+        last_data = {"X": None, "Y": None, "p_pd_dbm": None, "total_loss": None, "labels": None}
+
+        def redraw():
+            if last_data["X"] is None:
+                return
+            x_grid, y_grid = last_data["X"], last_data["Y"]
+
+            if z_var.get() == "Output power":
+                if units_var.get() == "dB":
+                    z_grid = last_data["p_pd_dbm"]
+                    z_label = "Output power (dBm)"
+                else:
+                    z_grid = [[pb.dbm_to_mw(v) for v in row] for row in last_data["p_pd_dbm"]]
+                    z_label = "Output power (mW)"
+            else:
+                if units_var.get() == "dB":
+                    z_grid = [[-tl for tl in row] for row in last_data["total_loss"]]
+                    z_label = "Transmission (dB)"
+                else:
+                    z_grid = [[pb.db_to_linear(tl) for tl in row] for row in last_data["total_loss"]]
+                    z_label = "Transmission (linear)"
+
+            ax.clear()
+            ax.plot_surface(np.array(x_grid), np.array(y_grid), np.array(z_grid),
+                             cmap="viridis", edgecolor="none", antialiased=True)
+            ax.set_xlabel(last_data["labels"][0])
+            ax.set_ylabel(last_data["labels"][1])
+            ax.set_zlabel(z_label)
+            fig.subplots_adjust(left=0.02, right=0.95, bottom=0.05, top=0.95)
+            canvas.draw()
+
+        def run_sweep():
+            error_var.set("")
+            try:
+                key1 = key_by_label[param1_var.get()]
+                key2 = key_by_label[param2_var.get()]
+                start1, stop1 = float(start1_var.get()), float(stop1_var.get())
+                start2, stop2 = float(start2_var.get()), float(stop2_var.get())
+                n1, n2 = int(points1_var.get()), int(points2_var.get())
+                if n1 < 2 or n2 < 2:
+                    raise ValueError("Points must be >= 2")
+
+                base_params = self._current_params()
+                step1 = (stop1 - start1) / (n1 - 1)
+                step2 = (stop2 - start2) / (n2 - 1)
+                xs = [start1 + i * step1 for i in range(n1)]
+                ys = [start2 + j * step2 for j in range(n2)]
+
+                x_grid = [[x for x in xs] for _ in ys]
+                y_grid = [[y for _ in xs] for y in ys]
+                p_pd_grid, loss_grid = [], []
+                for y in ys:
+                    p_row, loss_row = [], []
+                    for x in xs:
+                        params = dict(base_params)
+                        params[key1] = x
+                        params[key2] = y
+                        result = self._compute(params)
+                        p_row.append(result["p_pd_dbm"])
+                        loss_row.append(result["total_loss"])
+                    p_pd_grid.append(p_row)
+                    loss_grid.append(loss_row)
+            except (tk.TclError, ValueError) as exc:
+                error_var.set(f"Input error: {exc}")
+                return
+            except ZeroDivisionError:
+                error_var.set("Input error: division by zero for this sweep range")
+                return
+
+            last_data["X"] = x_grid
+            last_data["Y"] = y_grid
+            last_data["p_pd_dbm"] = p_pd_grid
+            last_data["total_loss"] = loss_grid
+            last_data["labels"] = (param1_var.get(), param2_var.get())
+            redraw()
+
+        ttk.Button(controls, text="Run 3D sweep", command=run_sweep).grid(
+            row=2, column=6, columnspan=2, padx=(4, 0), pady=(6, 0)
+        )
+
     def _clear_results(self, *args):
         for item in self.budget_tree.get_children():
             self.budget_tree.delete(item)
         for var in (self.v_out_power, self.v_total_loss, self.v_photocurrent,
-                    self.v_mod_eff, self.v_available_power, self.v_power_budget):
+                    self.v_mod_eff, self.v_available_power, self.v_power_budget,
+                    self.v_confinement, self.v_n_eff, self.v_alpha_out, self.v_er_out,
+                    self.v_mmi_length_out, self.v_mmi_excess_out, self.v_mmi_modes_out):
             var.set("—")
         self.error_var.set("")
 
@@ -448,7 +748,8 @@ class PowerBudgetGUI:
             self.error_var.set(f"Input error: {exc}")
         except ZeroDivisionError:
             self.error_var.set(
-                "Input error: division by zero (check ER, C, α/length, or bit rate values)"
+                "Input error: division by zero (check splitting ratio, indices, "
+                "dimensions, C, or bit rate values)"
             )
 
     def _f(self, var):
@@ -459,13 +760,23 @@ class PowerBudgetGUI:
             "p_laser": self._f(self.v_p_laser),
             "l_in": self._f(self.v_l_in),
             "l_out": self._f(self.v_l_out) if self.include_out_coupler.get() else 0.0,
-            "alpha": self._f(self.v_alpha),
+            "wavelength_nm": self._f(self.v_wavelength),
+            "n_core": self._f(self.v_n_core),
+            "n_clad": self._f(self.v_n_clad),
+            "core_width": self._f(self.v_core_width),
+            "core_height": self._f(self.v_core_height),
+            "alpha_core": self._f(self.v_alpha_core),
+            "alpha_clad": self._f(self.v_alpha_clad),
             "length1": self._f(self.v_length1),
             "length2": self._f(self.v_length2),
-            "n_ports": self._f(self.v_n_ports),
-            "mmi_excess": self._f(self.v_mmi_excess),
+            "n_ports": int(self._f(self.v_n_ports)),
+            "mmi_width": self._f(self.v_mmi_width),
+            "mmi_access_mode": self.mmi_access_mode.get(),
+            "taper_width": self._f(self.v_taper_width),
+            "mmi_length_mode": self.mmi_length_mode.get(),
+            "mmi_custom_length": self._f(self.v_mmi_custom_length),
             "mod_length": self._f(self.v_mod_length),
-            "mod_er": self._f(self.v_mod_er),
+            "splitting_ratio": self._f(self.v_splitting_ratio),
             "responsivity": self._f(self.v_responsivity),
             "sensitivity": self._f(self.v_sensitivity),
             "mod_mode": self.mod_efficiency_mode.get(),
@@ -478,11 +789,33 @@ class PowerBudgetGUI:
     def _compute(self, p):
         """Pure calculation from a params dict -> result dict. No widget access,
         so this can be reused for both the normal Calculate button and sweeps."""
-        l_prop1 = pb.propagation_loss_db(p["alpha"], p["length1"])
-        l_mmi = pb.mmi_total_loss_db(p["n_ports"], p["mmi_excess"])
-        l_prop2 = pb.propagation_loss_db(p["alpha"], p["length2"])
-        l_mod_il = pb.propagation_loss_db(p["alpha"], p["mod_length"])
-        l_er_penalty = pb.er_power_penalty_db(p["mod_er"])
+        wavelength_um = p["wavelength_nm"] / 1000
+        confinement, n_eff = pb.strip_confinement(
+            p["n_core"], p["n_clad"], p["core_width"], p["core_height"], wavelength_um
+        )
+        alpha = pb.material_loss_db_per_cm(confinement, p["alpha_core"], p["alpha_clad"])
+
+        n_ports = int(round(p["n_ports"]))
+        _, n_eff_vertical = pb.slab_mode(p["n_core"], p["n_clad"], p["core_height"], wavelength_um)
+        access_width = p["taper_width"] if p["mmi_access_mode"] == "Tapered" else p["core_width"]
+
+        if p["mmi_length_mode"] == "Derived":
+            mmi_length, mmi_excess, num_modes = pb.mmi_derive_length_and_loss(
+                n_eff_vertical, p["n_clad"], p["mmi_width"], n_ports, access_width, wavelength_um
+            )
+        else:
+            mmi_length = p["mmi_custom_length"]
+            mmi_excess, num_modes = pb.mmi_excess_loss_db(
+                n_eff_vertical, p["n_clad"], p["mmi_width"], n_ports, access_width,
+                wavelength_um, mmi_length
+            )
+
+        l_prop1 = pb.propagation_loss_db(alpha, p["length1"])
+        l_mmi = pb.mmi_total_loss_db(n_ports, mmi_excess)
+        l_prop2 = pb.propagation_loss_db(alpha, p["length2"])
+        l_mod_il = pb.propagation_loss_db(alpha, p["mod_length"])
+        er_db = pb.er_db_from_splitting_ratio(p["splitting_ratio"])
+        l_er_penalty = pb.er_power_penalty_db(er_db)
 
         stages = pb.compute_results(
             p["p_laser"], p["l_in"], l_prop1, l_mmi, l_prop2,
@@ -510,6 +843,13 @@ class PowerBudgetGUI:
             "e_bit_pJ": e_bit_pJ,
             "available": available,
             "power_budget": power_budget,
+            "confinement": confinement,
+            "n_eff": n_eff,
+            "alpha": alpha,
+            "er_db": er_db,
+            "mmi_length": mmi_length,
+            "mmi_excess": mmi_excess,
+            "mmi_num_modes": num_modes,
         }
 
     def _run_calculation(self):
@@ -524,6 +864,13 @@ class PowerBudgetGUI:
         self.v_mod_eff.set(f"{result['e_bit_pJ']:.4f}")
         self.v_available_power.set(f"{result['available']:.3f}")
         self.v_power_budget.set(f"{result['power_budget']:.3f}")
+        self.v_confinement.set(f"{result['confinement']:.4f}")
+        self.v_n_eff.set(f"{result['n_eff']:.4f}")
+        self.v_alpha_out.set(f"{result['alpha']:.4f}")
+        self.v_er_out.set(f"{result['er_db']:.3f}")
+        self.v_mmi_length_out.set(f"{result['mmi_length']:.4f}")
+        self.v_mmi_excess_out.set(f"{result['mmi_excess']:.4f}")
+        self.v_mmi_modes_out.set(str(result["mmi_num_modes"]))
 
 
 def main():
