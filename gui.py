@@ -29,6 +29,7 @@ SWEEP_PARAMS = [
     ("Waveguide length after MMI (um)", "length2"),
     ("MMI # output ports", "n_ports"),
     ("MMI width (um)", "mmi_width"),
+    ("MMI length (um)", "mmi_custom_length"),
     ("Modulator length (um)", "mod_length"),
     ("Modulator splitting ratio γ", "splitting_ratio"),
 ]
@@ -425,8 +426,11 @@ class PowerBudgetGUI:
         selected_annotation = {"out": None, "trans": None}
 
         def prefill_range(*_args):
+            key = key_by_label[param_var.get()]
+            if key == "mmi_custom_length":
+                self.mmi_length_mode.set("Custom")
             try:
-                current = self._current_params()[key_by_label[param_var.get()]]
+                current = self._current_params()[key]
             except (tk.TclError, ValueError):
                 return
             span = abs(current) * 0.5 if current != 0 else 1.0
@@ -637,8 +641,11 @@ class PowerBudgetGUI:
         toolbar.grid(row=3, column=0, sticky="w")
 
         def prefill(param_var, start_var, stop_var):
+            key = key_by_label[param_var.get()]
+            if key == "mmi_custom_length":
+                self.mmi_length_mode.set("Custom")
             try:
-                current = self._current_params()[key_by_label[param_var.get()]]
+                current = self._current_params()[key]
             except (tk.TclError, ValueError):
                 return
             span = abs(current) * 0.5 if current != 0 else 1.0
