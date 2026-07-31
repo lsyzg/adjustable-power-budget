@@ -2,8 +2,6 @@ switchtolayout;
 selectall;
 delete;
 
-wavelength = 1.55e-6;
-
 addrect;
 set('name', 'waveguide');
 set('x span', 4.8e-7);
@@ -30,7 +28,7 @@ set('x min bc', 'PML');
 set('x max bc', 'PML');
 set('y min bc', 'PML');
 set('y max bc', 'PML');
-set('wavelength', wavelength);
+set('wavelength', 1.55e-6);
 
 function get_imag(){
     findmodes;
@@ -41,7 +39,7 @@ function get_imag(){
 
 function get_alpha(){
     neff_imag = get_imag();
-    alpha_db_per_m = (4 * pi * neff_imag / wavelength) * 10 * log10(exp(1));
+    alpha_db_per_m = (4 * pi * neff_imag / 1.55e-6) * 10 * log10(exp(1));
     return alpha_db_per_m / 100;
 }
 
@@ -51,10 +49,10 @@ function set_waveguide_dimensions(x_span_m, y_span_m){
     setnamed('waveguide', 'y span', y_span_m);
 }
 
-target_alpha_db_per_cm = 2.0;  // <- set this to the alpha you want the waveguide to hit
+target_alpha_db_per_cm = 2.0;
 
-x_spans = linspace(3e-7, 7e-7, 9);    // waveguide width sweep, 300-700 nm
-y_spans = linspace(1.5e-7, 3e-7, 7);  // waveguide height sweep, 150-300 nm
+x_spans = linspace(3e-7, 7e-7, 9);
+y_spans = linspace(1.5e-7, 3e-7, 7);
 
 best_error = 1e300;
 best_x_span = x_spans(1);
