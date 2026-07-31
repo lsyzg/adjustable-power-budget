@@ -164,6 +164,10 @@ class PowerBudgetGUI:
         row += 1
         self.v_mmi_modes_out = self._add_output_row(parent, row, "MMI guided modes:")
         row += 1
+        self.v_cap_out = self._add_output_row(parent, row, "MZM capacitance (fF):")
+        row += 1
+        self.v_laser_electrical_out = self._add_output_row(parent, row, "Laser electrical power (W):")
+        row += 1
 
         self.error_var = tk.StringVar(value="")
         ttk.Label(parent, textvariable=self.error_var, foreground="red",
@@ -177,6 +181,8 @@ class PowerBudgetGUI:
 
         row = self._add_section(row, "Laser")
         self.v_p_laser = self._add_field(row, "Laser power (dBm):", "10")
+        row += 1
+        self.v_wallplug_eff = self._add_field(row, "Wall-plug efficiency:", "0.2")
         row += 1
 
         row = self._add_section(row, "Edge coupler")
@@ -271,17 +277,16 @@ class PowerBudgetGUI:
         mode_menu.grid(row=row, column=1, sticky="e")
         self._track(row, mode_menu)
         row += 1
-        self.mod_cap_row_start = row
-        self.v_cap_per_um = self._add_field(row, "Capacitance density (fF/um):", "0.1")
+        self.mod_kappa_row = row
+        self.v_kappa = self._add_field(row, "Electrode dielectric constant κ:", "3.9")
+        row += 1
+        self.mod_z0_row = row
+        self.v_z0 = self._add_field(row, "Characteristic impedance Z0 (Ω):", "50")
         row += 1
         self.v_vpp = self._add_field(row, "Drive swing (V):", "2.0")
         row += 1
-        self.mod_cap_row_end = row
-        self.v_p_drive = self._add_field(row, "Drive power (W):", "0.01")
-        row += 1
         self.v_bit_rate = self._add_field(row, "Bit rate (bits/s):", "25e9")
         row += 1
-        self.mod_power_row_end = row
 
         self._refresh_mod_eff_fields()
         self._refresh_out_coupler_fields()
@@ -297,8 +302,8 @@ class PowerBudgetGUI:
 
     def _refresh_mod_eff_fields(self):
         capacitive = self.mod_efficiency_mode.get() == "Capacitive"
-        self._set_rows_visible(self.mod_cap_row_start, self.mod_cap_row_end, capacitive)
-        self._set_rows_visible(self.mod_cap_row_end, self.mod_power_row_end, not capacitive)
+        self._set_rows_visible(self.mod_kappa_row, self.mod_kappa_row + 1, capacitive)
+        self._set_rows_visible(self.mod_z0_row, self.mod_z0_row + 1, not capacitive)
 
     def _refresh_out_coupler_fields(self):
         self._set_rows_visible(self.out_coupler_row, self.out_coupler_row + 1,
@@ -394,14 +399,17 @@ class PowerBudgetGUI:
                        command=lambda _=None: redraw()).grid(row=0, column=9, padx=(4, 16))
 
         show_out_var = tk.BooleanVar(value=True)
-        show_trans_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text="Output power", variable=show_out_var,
                          command=lambda: redraw()).grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(6, 0)
         )
-        ttk.Checkbutton(controls, text="Transmission", variable=show_trans_var,
-                         command=lambda: redraw()).grid(
-            row=1, column=3, columnspan=3, sticky="w", pady=(6, 0)
+
+        ttk.Label(controls, text="Right axis:").grid(row=1, column=3, sticky="w", pady=(6, 0))
+        right_axis_var = tk.StringVar(value="Transmission")
+        ttk.OptionMenu(controls, right_axis_var, right_axis_var.get(),
+                       "Transmission", "Link loss", "None",
+                       command=lambda _=None: redraw()).grid(
+            row=1, column=4, columnspan=2, sticky="w", padx=(4, 0), pady=(6, 0)
         )
 
         error_var = tk.StringVar(value="")
@@ -442,18 +450,30 @@ class PowerBudgetGUI:
 
         last_data = {"xs": None, "p_pd_dbm": None, "total_loss": None}
 
+        def right_axis_data():
+            mode = right_axis_var.get()
+            if mode == "None":
+                return None, None
+            total_loss = last_data["total_loss"]
+            if mode == "Transmission":
+                if units_var.get() == "dB":
+                    return [-tl for tl in total_loss], "Transmission (dB)"
+                return [pb.db_to_linear(tl) for tl in total_loss], "Transmission (linear)"
+            if units_var.get() == "dB":
+                return list(total_loss), "Link loss (dB)"
+            return [pb.dbm_to_mw(tl) for tl in total_loss], "Link loss (factor)"
+
         def redraw():
             if last_data["xs"] is None:
                 return
             xs = last_data["xs"]
             if units_var.get() == "dB":
                 out_vals = last_data["p_pd_dbm"]
-                trans_vals = [-tl for tl in last_data["total_loss"]]
-                out_label, trans_label = "Output power (dBm)", "Transmission (dB)"
+                out_label = "Output power (dBm)"
             else:
                 out_vals = [pb.dbm_to_mw(v) for v in last_data["p_pd_dbm"]]
-                trans_vals = [pb.db_to_linear(tl) for tl in last_data["total_loss"]]
-                out_label, trans_label = "Output power (mW)", "Transmission (linear)"
+                out_label = "Output power (mW)"
+            right_vals, right_label = right_axis_data()
 
             ax1.clear()
             ax2.clear()
@@ -469,10 +489,10 @@ class PowerBudgetGUI:
             else:
                 ax1.yaxis.set_visible(False)
 
-            if show_trans_var.get():
-                ax2.plot(xs, trans_vals, color="tab:red", marker="s", markersize=3, label=trans_label)
+            if right_vals is not None:
+                ax2.plot(xs, right_vals, color="tab:red", marker="s", markersize=3, label=right_label)
                 ax2.yaxis.set_label_position("right")
-                ax2.set_ylabel(trans_label, color="tab:red", labelpad=18)
+                ax2.set_ylabel(right_label, color="tab:red", labelpad=18)
                 ax2.tick_params(axis="y", labelcolor="tab:red")
                 ax2.yaxis.set_visible(True)
             else:
@@ -502,10 +522,9 @@ class PowerBudgetGUI:
 
             if units_var.get() == "dB":
                 out_vals = last_data["p_pd_dbm"]
-                trans_vals = [-tl for tl in last_data["total_loss"]]
             else:
                 out_vals = [pb.dbm_to_mw(v) for v in last_data["p_pd_dbm"]]
-                trans_vals = [pb.db_to_linear(tl) for tl in last_data["total_loss"]]
+            right_vals, right_label = right_axis_data()
 
             summary_parts = [f"x = {xs[idx]:.4g}"]
             if show_out_var.get():
@@ -517,15 +536,15 @@ class PowerBudgetGUI:
                     arrowprops={"arrowstyle": "->", "color": "tab:blue"},
                 )
                 summary_parts.append(f"output = {y:.4g}")
-            if show_trans_var.get():
-                y = trans_vals[idx]
+            if right_vals is not None:
+                y = right_vals[idx]
                 selected_annotation["trans"] = ax2.annotate(
                     f"({xs[idx]:.4g}, {y:.4g})", xy=(xs[idx], y),
                     xytext=(10, -20), textcoords="offset points", color="tab:red",
                     bbox={"boxstyle": "round", "fc": "white", "ec": "tab:red", "alpha": 0.9},
                     arrowprops={"arrowstyle": "->", "color": "tab:red"},
                 )
-                summary_parts.append(f"transmission = {y:.4g}")
+                summary_parts.append(f"{right_label.split(' (')[0].lower()} = {y:.4g}")
 
             point_label_var.set("Selected point: " + ", ".join(summary_parts))
             canvas.draw_idle()
@@ -619,7 +638,7 @@ class PowerBudgetGUI:
 
         ttk.Label(controls, text="Z:").grid(row=2, column=0, sticky="w", pady=(6, 0))
         z_var = tk.StringVar(value="Output power")
-        ttk.OptionMenu(controls, z_var, z_var.get(), "Output power", "Transmission",
+        ttk.OptionMenu(controls, z_var, z_var.get(), "Output power", "Transmission", "Link loss",
                        command=lambda _=None: redraw()).grid(row=2, column=1, padx=(4, 12), pady=(6, 0))
         ttk.Label(controls, text="Units:").grid(row=2, column=2, sticky="w", pady=(6, 0))
         units_var = tk.StringVar(value="dB")
@@ -664,20 +683,28 @@ class PowerBudgetGUI:
                 return
             x_grid, y_grid = last_data["X"], last_data["Y"]
 
-            if z_var.get() == "Output power":
+            z_mode = z_var.get()
+            if z_mode == "Output power":
                 if units_var.get() == "dB":
                     z_grid = last_data["p_pd_dbm"]
                     z_label = "Output power (dBm)"
                 else:
                     z_grid = [[pb.dbm_to_mw(v) for v in row] for row in last_data["p_pd_dbm"]]
                     z_label = "Output power (mW)"
-            else:
+            elif z_mode == "Transmission":
                 if units_var.get() == "dB":
                     z_grid = [[-tl for tl in row] for row in last_data["total_loss"]]
                     z_label = "Transmission (dB)"
                 else:
                     z_grid = [[pb.db_to_linear(tl) for tl in row] for row in last_data["total_loss"]]
                     z_label = "Transmission (linear)"
+            else:
+                if units_var.get() == "dB":
+                    z_grid = last_data["total_loss"]
+                    z_label = "Link loss (dB)"
+                else:
+                    z_grid = [[pb.dbm_to_mw(tl) for tl in row] for row in last_data["total_loss"]]
+                    z_label = "Link loss (factor)"
 
             ax.clear()
             ax.plot_surface(np.array(x_grid), np.array(y_grid), np.array(z_grid),
@@ -743,7 +770,8 @@ class PowerBudgetGUI:
         for var in (self.v_out_power, self.v_total_loss, self.v_photocurrent,
                     self.v_mod_eff, self.v_available_power, self.v_power_budget,
                     self.v_confinement, self.v_n_eff, self.v_alpha_out, self.v_er_out,
-                    self.v_mmi_length_out, self.v_mmi_excess_out, self.v_mmi_modes_out):
+                    self.v_mmi_length_out, self.v_mmi_excess_out, self.v_mmi_modes_out,
+                    self.v_cap_out, self.v_laser_electrical_out):
             var.set("—")
         self.error_var.set("")
 
@@ -765,6 +793,7 @@ class PowerBudgetGUI:
     def _current_params(self):
         return {
             "p_laser": self._f(self.v_p_laser),
+            "wallplug_eff": self._f(self.v_wallplug_eff),
             "l_in": self._f(self.v_l_in),
             "l_out": self._f(self.v_l_out) if self.include_out_coupler.get() else 0.0,
             "wavelength_nm": self._f(self.v_wavelength),
@@ -787,9 +816,9 @@ class PowerBudgetGUI:
             "responsivity": self._f(self.v_responsivity),
             "sensitivity": self._f(self.v_sensitivity),
             "mod_mode": self.mod_efficiency_mode.get(),
-            "cap_per_um": self._f(self.v_cap_per_um),
+            "kappa": self._f(self.v_kappa),
+            "z0": self._f(self.v_z0),
             "vpp": self._f(self.v_vpp),
-            "p_drive": self._f(self.v_p_drive),
             "bit_rate": self._f(self.v_bit_rate),
         }
 
@@ -834,13 +863,16 @@ class PowerBudgetGUI:
         photocurrent = pb.pd_metrics(p["responsivity"], p_pd_dbm)
 
         if p["mod_mode"] == "Capacitive":
-            cap_fF = pb.capacitance_fF(p["cap_per_um"], p["mod_length"])
+            cap_fF = pb.mzm_capacitance_fF(p["kappa"], p["mod_length"], p["core_height"], p["core_width"])
             e_bit_pJ = pb.modulation_efficiency_capacitive_pJ(cap_fF, p["vpp"])
         else:
-            e_bit_pJ = pb.modulation_efficiency_power_pJ(p["p_drive"], p["bit_rate"])
+            cap_fF = None
+            p_drive = pb.traveling_wave_drive_power_w(p["vpp"], p["z0"])
+            e_bit_pJ = pb.modulation_efficiency_power_pJ(p_drive, p["bit_rate"])
 
         available = pb.available_power_db(p["p_laser"], p["sensitivity"])
         power_budget = pb.power_budget_db(p["p_laser"], p["sensitivity"], total_loss)
+        laser_electrical_w = pb.laser_electrical_power_w(p["p_laser"], p["wallplug_eff"])
 
         return {
             "stages": stages,
@@ -857,6 +889,8 @@ class PowerBudgetGUI:
             "mmi_length": mmi_length,
             "mmi_excess": mmi_excess,
             "mmi_num_modes": num_modes,
+            "cap_fF": cap_fF,
+            "laser_electrical_w": laser_electrical_w,
         }
 
     def _run_calculation(self):
@@ -878,6 +912,8 @@ class PowerBudgetGUI:
         self.v_mmi_length_out.set(f"{result['mmi_length']:.4f}")
         self.v_mmi_excess_out.set(f"{result['mmi_excess']:.4f}")
         self.v_mmi_modes_out.set(str(result["mmi_num_modes"]))
+        self.v_cap_out.set(f"{result['cap_fF']:.4f}" if result["cap_fF"] is not None else "n/a (Power mode)")
+        self.v_laser_electrical_out.set(f"{result['laser_electrical_w']:.4f}")
 
 
 def main():
