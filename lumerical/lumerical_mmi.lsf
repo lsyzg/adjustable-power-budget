@@ -1,0 +1,55 @@
+switchtolayout;
+selectall;
+delete;
+
+MMI_length = 4e-6;
+MMI_width = 3e-6;
+Input_length = 5e-6; 
+Output_length = 5e-6;
+Output_gap = 1e-6;
+wg_height = 0.22e-6;
+wg_width = 0.48e-6;
+
+addrect;
+set('name', 'in_1');
+set('x min', -1*Input_length);
+set('x max', 0);
+set('y', 0);
+set('y span', wg_width);
+set('z', 0);
+set('z span', wg_height);
+set('material', 'Si (Silicon) - Palik');
+
+addrect;
+set('name', 'MMI');
+set('x min', 0);
+set('x max', MMI_length);
+set('y', 0);
+set('y span', MMI_width);
+set('z' , 0);
+set('z span', wg_height);
+set('material', 'Si (Silicon) - Palik');
+
+addrect;
+set('name', 'out_2');
+set('x min', MMI_length);
+set('x max', MMI_length + Output_length);
+set('y', wg_width/2 + Output_gap/2);
+set('y span', wg_width);
+set('z', 0);
+set('z span', wg_height);
+set('material', 'Si (Silicon) - Palik');
+
+addrect;
+set('name', 'out_3');
+set('x min', MMI_length);
+set('x max', MMI_length + Output_length);
+set('y', -wg_width/2 - Output_gap/2);
+set('y span', wg_width);
+set('z', 0);
+set('z span', wg_height);
+set('material', 'Si (Silicon) - Palik');
+
+addeme;
+set('name', 'EME_MMI');
+set('x min', -1*)

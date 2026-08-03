@@ -2,45 +2,95 @@ switchtolayout;
 selectall;
 delete;
 
-wavelength = 1.55e-6;
+wavelength   = 1.55e-6;
+n_core       = 3.45;
+n_clad       = 1.44;
+core_width   = 0.48e-6;
+core_height  = 0.22e-6;
+
+length1      = 5e-6;
+mmi_width    = 3.0e-6;
+mmi_length   = 9.2196e-6;
+n_ports      = 2;
+length2      = 5e-6;
+mod_length   = 500e-6;
+access_width = core_width;
 
 addrect;
-set('name', 'waveguide');
-set('x span', 4.8e-7);
-set('y span', 2.2e-7);
-set('z span', 10e-6);
-set('x', 0);
-set('y', 0);
+set('name','cladding');
+set('x span', length1 + mmi_length + length2 + mod_length + 20e-6);
+set('y span', mmi_width * 3);
+set('z span', core_height * 6);
+set('x', mod_length/2); 
+set('y', 0); 
 set('z', 0);
-set('material', 'Si (Silicon) - Palik');
+set('index', n_clad);
 
 addmesh;
-set('name', 'wg_mesh');
-set('based on a structure', 1);
-set('structure', 'waveguide');
-
-addfde;
-set('background material', 'SiO2 (Glass) - Palik');
-set('x span', 5e-6);
-set('y span', 2.5e-6);
-set('x', 0);
-set('y', 0);
+set('x span', length1 + mmi_length + length2 + mod_length + 24e-6);
+set('y span', mmi_width * 4);
+set('z span', core_height * 7);
+set('x', mod_length/2); 
+set('y', 0); 
 set('z', 0);
-set('x min bc', 'PML');
-set('x max bc', 'PML');
-set('y min bc', 'PML');
-set('y max bc', 'PML');
-set('wavelength', wavelength);
 
-function get_imag(){
-    findmodes;
-    selectmode(1);
-    neff_complex = getdata("mode1", "neff");
-    return imag(neff_complex);
+addrect;
+set('name','waveguide_pre');
+set('x span', length1);
+set('y span', core_width);
+set('z span', core_height);
+set('x', -length1/2 - mmi_length/2);
+set('y', 0); set('z', 0);
+set('index', n_core);
+
+addrect;
+set('name','mmi');
+set('x span', mmi_length);
+set('y span', mmi_width);
+set('z span', core_height);
+set('x', 0); set('y', 0); set('z', 0);
+set('index', n_core);
+
+for(k = 1:n_ports){
+    y_k = (2*k - n_ports - 1) * mmi_width / (2*n_ports);
+
+    addrect;
+    set('name', 'waveguide_post_' + num2str(k));
+    set('x span', length2);
+    set('y span', access_width);
+    set('z span', core_height);
+    set('x', mmi_length/2 + length2/2);
+    set('y', y_k); set('z', 0);
+    set('index', n_core);
+
+    addrect;
+    set('name', 'modulator_' + num2str(k));
+    set('x span', mod_length);
+    set('y span', access_width);
+    set('z span', core_height);
+    set('x', mmi_length/2 + length2 + mod_length/2);
+    set('y', y_k); set('z', 0);
+    set('index', n_core);
 }
 
-neff_imag = get_imag();
-alpha_db_per_m = (4 * pi * neff_imag / wavelength) * 10 * log10(exp(1));
-alpha_db_per_cm = alpha_db_per_m / 100;
+addeme;
+set('wavelength', wavelength);
+set('background material', '<Object defined dielectric>');
+set('index', n_clad);
+set('x min', -length1 - mmi_length/2);
+set('y span', mmi_width * 2);
+set('y', 0);
+set('number of cell groups', 4);
+set('group spans', [length1; mmi_length; length2; mod_length]);
+set('cells', [1; 1; 1; 1]);
+set('number of modes for all cell groups', 20);
 
-?alpha_db_per_cm
+addemeport;
+set('name','port_in'); set('port location','left');
+addemeport;
+set('name','port_out'); set('port location','right');
+
+? "Structure built: waveguide(" + num2str(length1*1e6) + "um) -> MMI("
+  + num2str(mmi_length*1e6) + "um x " + num2str(mmi_width*1e6) + "um) -> "
+  + num2str(n_ports) + " x [waveguide(" + num2str(length2*1e6) + "um) + modulator("
+  + num2str(mod_length*1e6) + "um)]";
