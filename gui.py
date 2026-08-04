@@ -19,6 +19,7 @@ import power_budget as pb
 # affect those two curves at all.
 SWEEP_PARAMS = [
     ("Laser power (dBm)", "p_laser"),
+    ("Wavelength (nm)", "wavelength_nm"),
     ("Edge coupler loss in (dB)", "l_in"),
     ("Edge coupler loss out (dB)", "l_out"),
     ("Core width (um)", "core_width"),
@@ -584,7 +585,52 @@ class PowerBudgetGUI:
             last_data["total_loss"] = total_loss_vals
             redraw()
 
+        def snapshot_graph():
+            if last_data["xs"] is None:
+                return
+            snap = tk.Toplevel(self.root)
+            snap.title("Sweep snapshot")
+            snap.minsize(640, 500)
+
+            snap_frame = ttk.Frame(snap, padding=10)
+            snap_frame.grid(row=0, column=0, sticky="nsew")
+            snap.columnconfigure(0, weight=1)
+            snap.rowconfigure(0, weight=1)
+            snap_frame.columnconfigure(0, weight=1)
+            snap_frame.rowconfigure(0, weight=1)
+
+            snap_fig = Figure(figsize=(6, 4.5), dpi=100)
+            snap_ax1 = snap_fig.add_subplot(111)
+            snap_ax2 = snap_ax1.twinx()
+
+            for line in ax1.get_lines():
+                snap_ax1.plot(line.get_xdata(), line.get_ydata(), color=line.get_color(),
+                               marker=line.get_marker(), markersize=line.get_markersize())
+            for line in ax2.get_lines():
+                snap_ax2.plot(line.get_xdata(), line.get_ydata(), color=line.get_color(),
+                               marker=line.get_marker(), markersize=line.get_markersize())
+
+            snap_ax1.set_xlabel(ax1.get_xlabel())
+            snap_ax1.set_ylabel(ax1.get_ylabel(), color="tab:blue", labelpad=10)
+            snap_ax1.tick_params(axis="y", labelcolor="tab:blue")
+            snap_ax1.yaxis.set_visible(ax1.yaxis.get_visible())
+            snap_ax1.grid(True, alpha=0.3)
+
+            snap_ax2.yaxis.set_label_position("right")
+            snap_ax2.set_ylabel(ax2.get_ylabel(), color="tab:red", labelpad=18)
+            snap_ax2.tick_params(axis="y", labelcolor="tab:red")
+            snap_ax2.yaxis.set_visible(ax2.yaxis.get_visible())
+            snap_fig.subplots_adjust(left=0.16, right=0.82, bottom=0.12, top=0.95)
+
+            snap_canvas = FigureCanvasTkAgg(snap_fig, master=snap_frame)
+            snap_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+            snap_toolbar = NavigationToolbar2Tk(snap_canvas, snap_frame, pack_toolbar=False)
+            snap_toolbar.update()
+            snap_toolbar.grid(row=1, column=0, sticky="w")
+            snap_canvas.draw()
+
         ttk.Button(controls, text="Run sweep", command=run_sweep).grid(row=0, column=10, padx=(8, 0))
+        ttk.Button(controls, text="Snapshot graph", command=snapshot_graph).grid(row=0, column=11, padx=(8, 0))
 
     def _open_3d_sweep_window(self):
         from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  registers the 3d projection
@@ -678,33 +724,26 @@ class PowerBudgetGUI:
 
         last_data = {"X": None, "Y": None, "p_pd_dbm": None, "total_loss": None, "labels": None}
 
+        def compute_z_grid():
+            z_mode = z_var.get()
+            if z_mode == "Output power":
+                if units_var.get() == "dB":
+                    return last_data["p_pd_dbm"], "Output power (dBm)"
+                return [[pb.dbm_to_mw(v) for v in row] for row in last_data["p_pd_dbm"]], "Output power (mW)"
+            if z_mode == "Transmission":
+                if units_var.get() == "dB":
+                    return [[-tl for tl in row] for row in last_data["total_loss"]], "Transmission (dB)"
+                return ([[pb.db_to_linear(tl) for tl in row] for row in last_data["total_loss"]],
+                        "Transmission (linear)")
+            if units_var.get() == "dB":
+                return last_data["total_loss"], "Link loss (dB)"
+            return [[pb.dbm_to_mw(tl) for tl in row] for row in last_data["total_loss"]], "Link loss (factor)"
+
         def redraw():
             if last_data["X"] is None:
                 return
             x_grid, y_grid = last_data["X"], last_data["Y"]
-
-            z_mode = z_var.get()
-            if z_mode == "Output power":
-                if units_var.get() == "dB":
-                    z_grid = last_data["p_pd_dbm"]
-                    z_label = "Output power (dBm)"
-                else:
-                    z_grid = [[pb.dbm_to_mw(v) for v in row] for row in last_data["p_pd_dbm"]]
-                    z_label = "Output power (mW)"
-            elif z_mode == "Transmission":
-                if units_var.get() == "dB":
-                    z_grid = [[-tl for tl in row] for row in last_data["total_loss"]]
-                    z_label = "Transmission (dB)"
-                else:
-                    z_grid = [[pb.db_to_linear(tl) for tl in row] for row in last_data["total_loss"]]
-                    z_label = "Transmission (linear)"
-            else:
-                if units_var.get() == "dB":
-                    z_grid = last_data["total_loss"]
-                    z_label = "Link loss (dB)"
-                else:
-                    z_grid = [[pb.dbm_to_mw(tl) for tl in row] for row in last_data["total_loss"]]
-                    z_label = "Link loss (factor)"
+            z_grid, z_label = compute_z_grid()
 
             ax.clear()
             ax.plot_surface(np.array(x_grid), np.array(y_grid), np.array(z_grid),
@@ -760,8 +799,43 @@ class PowerBudgetGUI:
             last_data["labels"] = (param1_var.get(), param2_var.get())
             redraw()
 
+        def snapshot_graph():
+            if last_data["X"] is None:
+                return
+            z_grid, z_label = compute_z_grid()
+
+            snap = tk.Toplevel(self.root)
+            snap.title("3D sweep snapshot")
+            snap.minsize(640, 560)
+
+            snap_frame = ttk.Frame(snap, padding=10)
+            snap_frame.grid(row=0, column=0, sticky="nsew")
+            snap.columnconfigure(0, weight=1)
+            snap.rowconfigure(0, weight=1)
+            snap_frame.columnconfigure(0, weight=1)
+            snap_frame.rowconfigure(0, weight=1)
+
+            snap_fig = Figure(figsize=(6.5, 5.5), dpi=100)
+            snap_ax = snap_fig.add_subplot(111, projection="3d")
+            snap_ax.plot_surface(np.array(last_data["X"]), np.array(last_data["Y"]), np.array(z_grid),
+                                  cmap="viridis", edgecolor="none", antialiased=True)
+            snap_ax.set_xlabel(last_data["labels"][0])
+            snap_ax.set_ylabel(last_data["labels"][1])
+            snap_ax.set_zlabel(z_label)
+            snap_fig.subplots_adjust(left=0.02, right=0.95, bottom=0.05, top=0.95)
+
+            snap_canvas = FigureCanvasTkAgg(snap_fig, master=snap_frame)
+            snap_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+            snap_toolbar = NavigationToolbar2Tk(snap_canvas, snap_frame, pack_toolbar=False)
+            snap_toolbar.update()
+            snap_toolbar.grid(row=1, column=0, sticky="w")
+            snap_canvas.draw()
+
         ttk.Button(controls, text="Run 3D sweep", command=run_sweep).grid(
-            row=2, column=6, columnspan=2, padx=(4, 0), pady=(6, 0)
+            row=2, column=6, padx=(4, 0), pady=(6, 0)
+        )
+        ttk.Button(controls, text="Snapshot graph", command=snapshot_graph).grid(
+            row=2, column=7, padx=(4, 0), pady=(6, 0)
         )
 
     def _clear_results(self, *args):

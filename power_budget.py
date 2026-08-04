@@ -57,7 +57,7 @@ def _slab_branch_root(kappa_max, thickness_um, branch_index):
 
 
 def _slab_mode_power_unnorm(kappa, gamma, thickness_um, even):
-    # take the power normalization of even and odd modes w closed integral
+    # take the power normalization of even and odd modes w closed integral approximation
     d = thickness_um
     if even:
         p_core = d / 2 + math.sin(kappa * d) / (2 * kappa)
