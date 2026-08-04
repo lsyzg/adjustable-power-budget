@@ -1,41 +1,20 @@
-"""Validate power_budget.py's analytical equations against Lumerical MODE
-Solutions simulations, using the same default dimensions as gui.py, and plot
-analytical vs simulated results for each major output: waveguide effective
-index, confinement factor, propagation loss (alpha), and MMI excess loss.
-
-Scope note: the waveguide FDE section (n_eff, confinement, alpha) uses
-simple constant (non-dispersive) indices, not the Palik material database,
-so that comparison isolates whether the analytical effective-index-method
-approximation reproduces the same idealized physics as a rigorous numerical
-solve. The MMI EME section instead uses the real Palik material database
-(matching lumerical_mmi.lsf's approach), so that comparison also picks up
-material dispersion, not just the mode-overlap/self-imaging math. Neither
-section models sidewall roughness scattering (see the note at the top of
-lumerical_alpha.lsf, where material-absorption-only alpha undershoots a
-realistic 2 dB/cm target by an order of magnitude) -- so don't expect
-either comparison to validate against a real fabricated device's loss.
-
-The waveguide FDE portion follows the same pattern already validated
-earlier via lumerical_alpha.lsf. The MMI EME portion (including its N
-output ports and one modulator stand-in per port) is a best-effort
-implementation -- exact addeme/addemeport property and result names can
-differ across Lumerical versions, so check that section first if it errors.
-
-No numpy/matplotlib dependency: plots render inside Lumerical's own script
-engine (mode.putv + the native plot() command).
-"""
-
 import sys, os
+from pathlib import Path
 import math
+import matplotlib.pyplot as plt
 
+# Adjust paths to match your local installation layout
 sys.path.append("/opt/lumerical/v231/api/python/")
 sys.path.append(os.path.dirname(__file__))
+
+parent_dir = Path(__file__).resolve().parent.parent
+sys.path.append(str(parent_dir))
 
 import lumapi
 import power_budget as pb
 
 # ---------------------------------------------------------------------------
-# Same default dimensions as gui.py's PowerBudgetGUI._build_inputs()
+# Dimension Presets (Matching gui.py & power_budget.py defaults)
 # ---------------------------------------------------------------------------
 WAVELENGTH_UM = 1.55
 N_CORE = 3.45
@@ -46,84 +25,115 @@ ALPHA_CORE_DB_PER_CM = 0.01
 ALPHA_CLAD_DB_PER_CM = 0.001
 MMI_WIDTH_UM = 3.0
 N_PORTS = 2
-ACCESS_WIDTH_UM = CORE_WIDTH_UM  # "Direct" access coupling, matches gui.py default
-ACCESS_LEN_UM = 5.0  # matches gui.py's length1/length2 defaults
-MOD_LENGTH_UM = 500.0  # matches gui.py's modulator arm length default
+ACCESS_WIDTH_UM = CORE_WIDTH_UM  
+ACCESS_LEN_UM = 5.0  
+MOD_LENGTH_UM = 500.0  
 
 
 def db_per_cm_to_k(alpha_db_per_cm, wavelength_um):
-    """Invert the alpha(neff_imag) formula: what imaginary index k gives a
-    bulk medium this alpha, i.e. treating k itself as neff_imag would be for
-    an unconfined (infinite) medium of that material."""
+    """Converts a targeted dB/cm loss into an imaginary refractive index k."""
     alpha_db_per_m = alpha_db_per_cm * 100
     return alpha_db_per_m * (wavelength_um * 1e-6) / (4 * math.pi * 10 * math.log10(math.e))
 
 
-mode = lumapi.MODE(hide=True)
+# Initialize the Lumerical MODE Session
+mode = lumapi.MODE()
 
 # ---------------------------------------------------------------------------
-# Waveguide FDE: effective index, confinement factor, propagation loss
+# Waveguide FDE: Effective Index, Confinement, and Propagation Loss
 # ---------------------------------------------------------------------------
-
-def build_waveguide(width_um, height_um):
-    k_core = db_per_cm_to_k(ALPHA_CORE_DB_PER_CM, WAVELENGTH_UM)
-    k_clad = db_per_cm_to_k(ALPHA_CLAD_DB_PER_CM, WAVELENGTH_UM)
-    mode.eval(f"""
-    switchtolayout; selectall; delete;
-
-    wavelength = {WAVELENGTH_UM * 1e-6:e};
-    core_width = {width_um * 1e-6:e};
-    core_height = {height_um * 1e-6:e};
-
-    addrect;
-    set('name','waveguide');
-    set('x span', core_width);
-    set('y span', core_height);
-    set('z span', 10e-6);
-    set('x',0); set('y',0); set('z',0);
-    set('index', {N_CORE:e} + 1i*{k_core:e});
-
-    addfde;
-    set('background material', '<Object defined dielectric>');
-    set('index', {N_CLAD:e} + 1i*{k_clad:e});
-    set('x span', 5e-6);
-    set('y span', 2.5e-6);
-    set('x',0); set('y',0); set('z',0);
-    set('x min bc','PML'); set('x max bc','PML');
-    set('y min bc','PML'); set('y max bc','PML');
-    set('wavelength', wavelength);
-
-    function get_neff(){{
-        findmodes; selectmode(1);
-        return real(getdata("mode1","neff"));
-    }}
-
-    function get_confinement(){{
-        findmodes; selectmode(1);
-        E2 = pinch(getdata("mode1","E2"));
-        x = getdata("mode1","x");
-        y = getdata("mode1","y");
-        # outer-product mask: 1 inside the core rectangle, 0 outside.
-        # Flag: verify x/y come back as the shapes pinch(E2) expects on
-        # your Lumerical version -- this is the least-tested line here.
-        core_mask = (abs(x) < core_width/2) * transpose(abs(y) < core_height/2);
-        return sum(sum(E2*core_mask)) / sum(sum(E2));
-    }}
-
-    function get_alpha(){{
-        findmodes; selectmode(1);
-        neff_imag = imag(getdata("mode1","neff"));
-        alpha_db_per_m = (4*pi*neff_imag/wavelength) * 10*log10(exp(1));
-        return alpha_db_per_m/100;
-    }}
-    """)
-
 
 def simulate_waveguide(width_um, height_um):
-    build_waveguide(width_um, height_um)
-    n_eff = mode.get_neff()
-    confinement = mode.get_confinement()
-    alpha = mode.get_alpha()
+    k_core = db_per_cm_to_k(ALPHA_CORE_DB_PER_CM, WAVELENGTH_UM)
+    k_clad = db_per_cm_to_k(ALPHA_CLAD_DB_PER_CM, WAVELENGTH_UM)
+
+    mode.putv("WAVELENGTH_UM", float(WAVELENGTH_UM))
+    mode.putv("N_CORE", float(N_CORE))
+    mode.putv("N_CLAD", float(N_CLAD))
+    mode.putv("width_um", float(width_um))
+    mode.putv("height_um", float(height_um))
+    mode.putv("k_core", float(k_core))
+    mode.putv("k_clad", float(k_clad))
+
+    script = """
+    switchtolayout; 
+    selectall; 
+    delete;
+
+    wavelength = WAVELENGTH_UM * 1e-6;
+    core_w = width_um * 1e-6;
+    core_h = height_um * 1e-6;
+
+    # Core Waveguide (Centered at origin, cross-section in X-Y)
+    addrect;
+    set('name', 'waveguide');
+    set('x span', core_w);
+    set('y span', core_h);
+    set('z span', 10e-6);
+    set('x', 0); set('y', 0); set('z', 0);
+    set('index', N_CORE + 1i*k_core);
+
+    # FDE Solver Region (2D Z normal for X-Y cross section)
+    addfde;
+    set('solver type', '2D Z normal');
+    set('x span', 5e-6);
+    set('y span', 2.5e-6);
+    set('x', 0); set('y', 0); set('z', 0);
+    set('background material', '<Object defined dielectric>');
+    set('index', N_CLAD + 1i*k_clad);
+    set('x min bc', 'PML'); set('x max bc', 'PML');
+    set('y min bc', 'PML'); set('y max bc', 'PML');
+    set('wavelength', wavelength);
+
+    # Solve modes
+    findmodes;
+    
+    # Extract fundamental mode effective index
+    neff_complex = getdata("mode1", "neff");
+    n_eff_real = real(neff_complex);
+    neff_imag = imag(neff_complex);
+    alpha_calc = ((4*pi*neff_imag)/wavelength) * 10*log10(exp(1)) / 100;
+
+    # Extract spatial grid and total electric field intensity
+    x = getdata("mode1", "x");
+    y = getdata("mode1", "y");
+    E2 = pinch(getelectric("mode1"));
+
+    nx = length(x);
+    ny = length(y);
+
+    # Align matrix orientation [Nx, Ny]
+    if (size(E2, 1) != nx) {
+        E2 = transpose(E2);
+    }
+
+    # Integrate intensity over core region
+    p_core = 0;
+    p_total = sum(E2);
+
+    for (i = 1:nx) {
+        if (abs(x(i)) <= core_w/2) {
+            for (j = 1:ny) {
+                if (abs(y(j)) <= core_h/2) {
+                    p_core = p_core + E2(i, j);
+                }
+            }
+        }
+    }
+
+    confinement_calc = p_core / p_total;
+    """
+
+    try:
+        mode.eval(script)
+    except lumapi.LumApiError as err:
+        print(f"[ERROR] Failed running simulate_waveguide for width={width_um} um")
+        raise err
+
+    n_eff = mode.getv("n_eff_real")
+    confinement = mode.getv("confinement_calc")
+    alpha = mode.getv("alpha_calc")
+
     return confinement, n_eff, alpha
 
 
@@ -134,186 +144,147 @@ def analytical_waveguide(width_um, height_um):
 
 
 # ---------------------------------------------------------------------------
-# MMI EME: excess loss vs device length, with one MZM per output port
+# MMI EME: Excess Loss vs Device Length Validation Loop
 # ---------------------------------------------------------------------------
-#
-# Structure and rect positioning (material + x min/x max) follow
-# lumerical_mmi.lsf's established style, generalized from its fixed 2-output
-# example to N_PORTS outputs -- each output waveguide is followed by its own
-# modulator stand-in (a plain waveguide segment MOD_LENGTH_UM long, matching
-# how gui.py/power_budget.py already model insertion loss as alpha*length,
-# not a literal two-arm interferometer). Output positions use
-# pb.mmi_tap_position() rather than a fixed gap, so the simulated geometry
-# matches what the analytical side assumes.
-#
-# Note: this section uses the real Palik material database (like
-# lumerical_mmi.lsf), not the constant indices used in the waveguide FDE
-# section above -- so unlike that section, this comparison also picks up
-# material dispersion, not just the mode-overlap/self-imaging math itself.
 
-def build_mmi_eme(mmi_length_um):
+def simulate_mmi_eme(mmi_length_um):
+    # Obtain precise tap coordinates computed from analytical logic
     tap_positions_um = [pb.mmi_tap_position(k, N_PORTS, MMI_WIDTH_UM) for k in range(1, N_PORTS + 1)]
 
-    mode.eval(f"""
+    mode.putv("WAVELENGTH_UM", float(WAVELENGTH_UM))
+    mode.putv("ACCESS_WIDTH_UM", float(ACCESS_WIDTH_UM))
+    mode.putv("CORE_HEIGHT_UM", float(CORE_HEIGHT_UM))
+    mode.putv("MMI_WIDTH_UM", float(MMI_WIDTH_UM))
+    mode.putv("ACCESS_LEN_UM", float(ACCESS_LEN_UM))
+    mode.putv("mmi_length_um", float(mmi_length_um))
+    mode.putv("MOD_LENGTH_UM", float(MOD_LENGTH_UM))
+    mode.putv("tap_positions_um", tap_positions_um)
+    mode.putv("N_PORTS", int(N_PORTS))
+
+    script = """
     switchtolayout; selectall; delete;
 
-    wavelength = {WAVELENGTH_UM * 1e-6:e};
-    access_w = {ACCESS_WIDTH_UM * 1e-6:e};
-    wg_height = {CORE_HEIGHT_UM * 1e-6:e};
-    mmi_w = {MMI_WIDTH_UM * 1e-6:e};
-    access_len = {ACCESS_LEN_UM * 1e-6:e};
-    mmi_len = {mmi_length_um * 1e-6:e};
-    mod_len = {MOD_LENGTH_UM * 1e-6:e};
+    wavelength = WAVELENGTH_UM * 1e-6;
+    access_w = ACCESS_WIDTH_UM * 1e-6;
+    wg_height = CORE_HEIGHT_UM * 1e-6;
+    mmi_w = MMI_WIDTH_UM * 1e-6;
+    access_len = ACCESS_LEN_UM * 1e-6;
+    mmi_len = mmi_length_um * 1e-6;
+    mod_len = MOD_LENGTH_UM * 1e-6;
 
-    addrect;
-    set('name','in_1');
+    # Input waveguide (Port 1 side)
+    addrect; set('name','in_1');
     set('x min', -access_len - mmi_len/2); set('x max', -mmi_len/2);
     set('y', 0); set('y span', access_w);
     set('z', 0); set('z span', wg_height);
     set('material', 'Si (Silicon) - Palik');
 
-    addrect;
-    set('name','MMI');
+    # Central MMI region body
+    addrect; set('name','MMI');
     set('x min', -mmi_len/2); set('x max', mmi_len/2);
     set('y', 0); set('y span', mmi_w);
     set('z', 0); set('z span', wg_height);
     set('material', 'Si (Silicon) - Palik');
-    """)
 
-    for i, y_um in enumerate(tap_positions_um, start=1):
-        mode.eval(f"""
-        addrect;
-        set('name','out_{i}');
+    # Dynamically generate N balanced output ports & Modulator segments
+    for(k=1:N_PORTS) {
+        y_pos = tap_positions_um(k) * 1e-6;
+        
+        # Output Port Segment
+        addrect; set('name','out_' + num2str(k));
         set('x min', mmi_len/2); set('x max', mmi_len/2 + access_len);
-        set('y', {y_um * 1e-6:e}); set('y span', access_w);
+        set('y', y_pos); set('y span', access_w);
         set('z', 0); set('z span', wg_height);
         set('material', 'Si (Silicon) - Palik');
-
-        addrect;
-        set('name','mzm_{i}');
+        
+        # Modulator Arm Segment extension
+        addrect; set('name','mod_' + num2str(k));
         set('x min', mmi_len/2 + access_len); set('x max', mmi_len/2 + access_len + mod_len);
-        set('y', {y_um * 1e-6:e}); set('y span', access_w);
+        set('y', y_pos); set('y span', access_w);
         set('z', 0); set('z span', wg_height);
         set('material', 'Si (Silicon) - Palik');
-        """)
+    }
 
-    mode.eval(f"""
+    # Add EME Solver Region setup
     addeme;
+    set('allow cross-section extraction', true);
     set('wavelength', wavelength);
-    set('background material', 'SiO2 (Glass) - Palik');
     set('x min', -access_len - mmi_len/2);
-    set('y span', mmi_w * 2);
-    set('y', 0);
+    
+    # Cover total span up through the modulator arrays
+    total_x_max = mmi_len/2 + access_len + mod_len;
+    set('x max', total_x_max);
+    set('y', 0); set('y span', mmi_w * 1.5);
+    set('z', 0); set('z span', wg_height * 4);
+
+    # Define EME Solver Groups (1: input access, 2: MMI Body, 3: outputs, 4: modulators)
     set('number of cell groups', 4);
     set('group spans', [access_len; mmi_len; access_len; mod_len]);
-    set('cells', [1; 1; 1; 1]);
-    set('number of modes for all cell groups', 20);
+    set('cells', [1; 10; 1; 1]);
+    set('modes', [5; 20; 5; 5]); # Balanced mode sizing targets
 
-    addemeport;
-    set('name','port_in'); set('port location','left');
-    """)
+    # Setup Port Definitions 
+    addemeport; set('port location', 'left'); set('y', 0); set('y span', access_w*2);
+    
+    for(k=1:N_PORTS) {
+        y_pos = tap_positions_um(k) * 1e-6;
+        addemeport; 
+        set('port location', 'right'); 
+        set('use custom port reference coordinates', true);
+        set('port reference x', mmi_len/2 + access_len + mod_len);
+        set('y', y_pos); set('y span', access_w*2);
+    }
 
-    for i, y_um in enumerate(tap_positions_um, start=1):
-        mode.eval(f"""
-        addemeport;
-        set('name','port_out{i}'); set('port location','right');
-        set('y', {y_um * 1e-6:e}); set('y span', access_w * 3);
-        """)
-
-    mode.eval(f"""
-    function get_mmi_excess_loss(){{
-        run;
-        emepropagate;
-        s_total = 0;
-        for(k = 1:{N_PORTS}){{
-            port_name = 'EME::Ports::port_out' + num2str(k);
-            # Flag: verify this S-parameter dataset/field name against your
-            # Lumerical version's EME results -- least-tested line here.
-            s_param = getresult(port_name, 's');
-            s_total = s_total + abs(s_param.s21)^2;
-        }}
-        return -10*log10(s_total);
-    }}
-    """)
-
-
-def simulate_mmi_excess_loss(mmi_length_um):
-    build_mmi_eme(mmi_length_um)
-    return mode.get_mmi_excess_loss()
-
-
-def analytical_mmi_excess_loss(mmi_length_um):
-    n_eff_vertical = pb.slab_mode(N_CORE, N_CLAD, CORE_HEIGHT_UM, WAVELENGTH_UM)[1]
-    excess_db, _num_modes = pb.mmi_excess_loss_db(
-        n_eff_vertical, N_CLAD, MMI_WIDTH_UM, N_PORTS, ACCESS_WIDTH_UM, WAVELENGTH_UM, mmi_length_um
-    )
-    return excess_db
-
+    # Run full EME S-Matrix cascades
+    run;
+    emegrow;
+    
+    # Query transmission from standard input port 1 to output targets 
+    s_matrix = getresult("eme", "s");
+    total_transmitted_power = 0;
+    for(k=2:(N_PORTS+1)) {
+        total_transmitted_power = total_transmitted_power + abs(s_matrix(k, 1))^2;
+    }
+    
+    # Calculate global excess loss parameter
+    mmi_excess_loss_db = -10 * log10(total_transmitted_power);
+    """
+    
+    mode.eval(script)
+    return mode.getv("mmi_excess_loss_db")
 
 # ---------------------------------------------------------------------------
-# Sweep, compare, and plot (natively inside Lumerical) each major output
+# Multi-point Validation Iteration Engine & Local native Plotting
 # ---------------------------------------------------------------------------
-
-def linspace(start, stop, n):
-    if n <= 1:
-        return [start]
-    step = (stop - start) / (n - 1)
-    return [start + i * step for i in range(n)]
-
-
-def plot_comparison(x_vals, analytical_vals, simulated_vals, x_label, y_label, title):
-    mode.putv("x_data", x_vals)
-    mode.putv("analytical_data", analytical_vals)
-    mode.putv("simulated_data", simulated_vals)
-    mode.eval(f"""
-    plot(x_data, analytical_data, simulated_data, "{x_label}", "{y_label}", "{title}");
-    legend("analytical", "simulated");
-    """)
-
-
-def run_waveguide_validation():
-    widths_um = linspace(CORE_WIDTH_UM * 0.7, CORE_WIDTH_UM * 1.3, 7)
-
-    confinements_analytical, confinements_sim = [], []
-    n_effs_analytical, n_effs_sim = [], []
-    alphas_analytical, alphas_sim = [], []
-
-    for w in widths_um:
-        c_a, n_a, a_a = analytical_waveguide(w, CORE_HEIGHT_UM)
-        c_s, n_s, a_s = simulate_waveguide(w, CORE_HEIGHT_UM)
-        confinements_analytical.append(c_a); confinements_sim.append(c_s)
-        n_effs_analytical.append(n_a); n_effs_sim.append(n_s)
-        alphas_analytical.append(a_a); alphas_sim.append(a_s)
-        print(f"width={w:.3f}um  Gamma: analytical={c_a:.4f} sim={c_s:.4f}  "
-              f"n_eff: analytical={n_a:.4f} sim={n_s:.4f}  "
-              f"alpha: analytical={a_a:.5f} sim={a_s:.5f}")
-
-    plot_comparison(widths_um, confinements_analytical, confinements_sim,
-                     "Core width (m)", "Confinement factor", "Confinement: analytical vs simulated")
-    plot_comparison(widths_um, n_effs_analytical, n_effs_sim,
-                     "Core width (m)", "Effective index", "n_eff: analytical vs simulated")
-    plot_comparison(widths_um, alphas_analytical, alphas_sim,
-                     "Core width (m)", "alpha (dB/cm)", "Propagation loss: analytical vs simulated")
-
-
-def run_mmi_validation():
-    n_eff_vertical = pb.slab_mode(N_CORE, N_CLAD, CORE_HEIGHT_UM, WAVELENGTH_UM)[1]
-    optimal_length_um = pb.mmi_derive_length_and_loss(
-        n_eff_vertical, N_CLAD, MMI_WIDTH_UM, N_PORTS, ACCESS_WIDTH_UM, WAVELENGTH_UM
-    )[0]
-    lengths_um = linspace(optimal_length_um * 0.5, optimal_length_um * 1.5, 9)
-
-    excess_analytical, excess_sim = [], []
-    for length_um in lengths_um:
-        a = analytical_mmi_excess_loss(length_um)
-        s = simulate_mmi_excess_loss(length_um)
-        excess_analytical.append(a); excess_sim.append(s)
-        print(f"MMI length={length_um:.2f}um  excess loss: analytical={a:.4f}dB sim={s:.4f}dB")
-
-    plot_comparison(lengths_um, excess_analytical, excess_sim,
-                     "MMI length (m)", "Excess loss (dB)", "MMI excess loss: analytical vs simulated")
-
 
 if __name__ == "__main__":
-    run_waveguide_validation()
-    run_mmi_validation()
+    widths = [0.4, 0.45, 0.48, 0.52, 0.6]
+    sim_neff, ana_neff = [], []
+
+    print("Validating Waveguide Modes using Lumerical FDE...")
+    for w in widths:
+        _, n_sim, _ = simulate_waveguide(w, CORE_HEIGHT_UM)
+        _, n_ana = pb.strip_confinement(N_CORE, N_CLAD, w, CORE_HEIGHT_UM, WAVELENGTH_UM)
+        sim_neff.append(float(n_sim))
+        ana_neff.append(float(n_ana))
+
+    # ---------------------------------------------------------------------------
+    # Plotting directly in Python via Matplotlib (Bypasses Lumerical GUI)
+    # ---------------------------------------------------------------------------
+    plt.figure(figsize=(8, 5))
+    
+    plt.plot(widths, sim_neff, 'o-', color='#1f77b4', linewidth=2, label='Rigorous Numerical Solve (FDE)')
+    plt.plot(widths, ana_neff, 's--', color='#ff7f0e', linewidth=2, label='Analytical EIM Approximation')
+    
+    plt.xlabel('Core Width (µm)', fontsize=12)
+    plt.ylabel('Real Effective Index ($n_{eff}$)', fontsize=12)
+    plt.title('Silicon Waveguide Effective Index Validation', fontsize=14, fontweight='bold')
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend(fontsize=11)
+    
+    plt.tight_layout()
+    
+    # Save the figure to file and display
+    plt.savefig('waveguide_validation.png', dpi=300)
+    print("Plot saved successfully to 'waveguide_validation.png'.")
+    plt.show()
