@@ -33,6 +33,7 @@ SWEEP_PARAMS = [
     ("MMI length (um)", "mmi_custom_length"),
     ("Modulator length (um)", "mod_length"),
     ("Modulator splitting ratio γ", "splitting_ratio"),
+    ("Combiner excess loss (dB)", "combiner_excess"),
 ]
 
 
@@ -258,6 +259,8 @@ class PowerBudgetGUI:
         self.v_mod_length = self._add_field(row, "Length (um):", "500")
         row += 1
         self.v_splitting_ratio = self._add_field(row, "Splitting ratio γ (0.5 = ideal):", "0.48")
+        row += 1
+        self.v_combiner_excess = self._add_field(row, "Combiner excess loss (dB):", "0.3")
         row += 1
 
         row = self._add_section(row, "Photodetector")
@@ -887,6 +890,7 @@ class PowerBudgetGUI:
             "mmi_custom_length": self._f(self.v_mmi_custom_length),
             "mod_length": self._f(self.v_mod_length),
             "splitting_ratio": self._f(self.v_splitting_ratio),
+            "combiner_excess": self._f(self.v_combiner_excess),
             "responsivity": self._f(self.v_responsivity),
             "sensitivity": self._f(self.v_sensitivity),
             "mod_mode": self.mod_efficiency_mode.get(),
@@ -905,7 +909,10 @@ class PowerBudgetGUI:
         )
         alpha = pb.material_loss_db_per_cm(confinement, p["alpha_core"], p["alpha_clad"])
 
-        n_ports = int(round(p["n_ports"]))
+        # Round to the nearest even integer (min 2) so sweeps that pass
+        # continuous/odd values still land on a valid MZM-pairable port count.
+        n_ports = max(2, int(round(p["n_ports"] / 2)) * 2)
+        num_mzms = pb.num_mzms(n_ports)
         _, n_eff_vertical = pb.slab_mode(p["n_core"], p["n_clad"], p["core_height"], wavelength_um)
         access_width = p["taper_width"] if p["mmi_access_mode"] == "Tapered" else p["core_width"]
 
@@ -929,7 +936,7 @@ class PowerBudgetGUI:
 
         stages = pb.compute_results(
             p["p_laser"], p["l_in"], l_prop1, l_mmi, l_prop2,
-            l_mod_il, l_er_penalty, p["l_out"]
+            l_mod_il, l_er_penalty, p["combiner_excess"], p["l_out"]
         )
 
         p_pd_dbm = stages[-2][1]  # power at photodetector, before the total-loss entry

@@ -284,8 +284,13 @@ def modulation_efficiency_power_pJ(p_drive_w, bit_rate_bps):
     return e_bit_j * 1e12
 
 # power budget
+def num_mzms(n_ports):
+    if n_ports % 2 != 0:
+        raise ValueError("n_ports must be even")
+    return n_ports // 2
+
 def compute_results(p_laser_dbm, l_in_db, l_prop1_db, l_mmi_total_db, l_prop2_db,
-                          l_mod_insertion_db, l_mod_er_penalty_db, l_out_db):
+                          l_mod_insertion_db, l_mod_er_penalty_db, l_combiner_excess_db, l_out_db):
     stages = []
     p = p_laser_dbm
     stages.append(("Laser", p))
@@ -303,10 +308,13 @@ def compute_results(p_laser_dbm, l_in_db, l_prop1_db, l_mmi_total_db, l_prop2_db
     stages.append(("Waveguide (post-MMI)", p))
 
     p -= l_mod_insertion_db
-    stages.append(("Modulator (insertion loss)", p))
+    stages.append(("Modulator (IL)", p))
 
     p -= l_mod_er_penalty_db
-    stages.append(("Modulator (ER penalty)", p))
+    stages.append(("Modulator (ER)", p))
+
+    p -= l_combiner_excess_db
+    stages.append(("Modulator (combiner excess loss)", p))
 
     p -= l_out_db
     stages.append(("Edge coupler (out)", p))
