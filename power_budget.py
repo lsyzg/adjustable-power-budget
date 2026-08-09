@@ -1,5 +1,7 @@
 import math
 
+import materials_data
+
 EPSILON_0 = 8.8541878128e-12
 
 # conversions
@@ -104,6 +106,33 @@ def strip_confinement(n_core, n_clad, width_um, height_um, wavelength_um):
 def material_loss_db_per_cm(confinement, alpha_core_db_per_cm, alpha_clad_db_per_cm):
     # material loss based on confinement using first-order perturburation theory
     return confinement * alpha_core_db_per_cm + (1 - confinement) * alpha_clad_db_per_cm
+
+
+_MATERIAL_NK_TABLES = {
+    "Si": materials_data.SI_NK_UM,
+    "SiO2": materials_data.SIO2_NK_UM,
+}
+
+
+def _interp_k(nk_table, wavelength_um):
+    # find refractive index for corresponding wavelength, nk set to closest wavelength
+    if wavelength_um <= nk_table[0][0]:
+        return nk_table[0][2]
+    if wavelength_um >= nk_table[-1][0]:
+        return nk_table[-1][2]
+    for (wl0, _n0, k0), (wl1, _n1, k1) in zip(nk_table, nk_table[1:]):
+        if wl0 <= wavelength_um <= wl1:
+            t = (wavelength_um - wl0) / (wl1 - wl0)
+            return k0 + t * (k1 - k0)
+    return nk_table[-1][2]
+
+# waveguide loss (basically negligible at c-band)
+def material_bulk_loss_db_per_cm(material, wavelength_um):
+    # find bulk loss from table
+    k = _interp_k(_MATERIAL_NK_TABLES[material], wavelength_um)
+    alpha_np_per_um = 4 * math.pi * k / wavelength_um
+    alpha_np_per_cm = alpha_np_per_um * 1e4
+    return alpha_np_per_cm * 10 * math.log10(math.e)
 
 
 # MMI excess loss
@@ -290,7 +319,7 @@ def num_mzms(n_ports):
     return n_ports // 2
 
 def compute_results(p_laser_dbm, l_in_db, l_prop1_db, l_mmi_total_db, l_prop2_db,
-                          l_mod_insertion_db, l_mod_er_penalty_db, l_combiner_excess_db, l_out_db):
+                          l_mod_insertion_db, l_mod_er_penalty_db, l_recomb_mmi_db, l_out_db):
     stages = []
     p = p_laser_dbm
     stages.append(("Laser", p))
@@ -313,8 +342,8 @@ def compute_results(p_laser_dbm, l_in_db, l_prop1_db, l_mmi_total_db, l_prop2_db
     p -= l_mod_er_penalty_db
     stages.append(("Modulator (ER)", p))
 
-    p -= l_combiner_excess_db
-    stages.append(("Modulator (combiner excess loss)", p))
+    p -= l_recomb_mmi_db
+    stages.append(("Recombination MMI", p))
 
     p -= l_out_db
     stages.append(("Edge coupler (out)", p))

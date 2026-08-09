@@ -4,14 +4,18 @@ All calculation logic lives in power_budget.py — this module only handles
 input widgets, layout, and displaying results.
 """
 
+import os
 import tkinter as tk
 from tkinter import ttk
 
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
+from PIL import Image, ImageTk
 
 import power_budget as pb
+
+PICTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pictures")
 
 # (display label, params-dict key) for parameters that feed the optical
 # cascade — these are the only ones worth sweeping against Output power /
@@ -33,50 +37,113 @@ SWEEP_PARAMS = [
     ("MMI length (um)", "mmi_custom_length"),
     ("Modulator length (um)", "mod_length"),
     ("Modulator splitting ratio γ", "splitting_ratio"),
-    ("Combiner excess loss (dB)", "combiner_excess"),
+    ("Recombination MMI width (um)", "recomb_width"),
+    ("Recombination MMI length (um)", "recomb_custom_length"),
 ]
 
 
 class PowerBudgetGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("MMI Modulation Power Calculator")
+        self.root.title("LITE (Lightweight Interconnect Testing Environment)")
 
         self.mod_efficiency_mode = tk.StringVar(value="Capacitive")
         self.include_out_coupler = tk.BooleanVar(value=True)
         self.mmi_access_mode = tk.StringVar(value="Direct")
         self.mmi_length_mode = tk.StringVar(value="Derived")
+        self.recomb_length_mode = tk.StringVar(value="Derived")
+        self.alpha_source_mode = tk.StringVar(value="From material data")
         self._row_widgets = {}
 
         root.minsize(700, 500)
 
-        container = ttk.Frame(root, padding=10)
-        container.grid(row=0, column=0, sticky="nsew")
+        notebook = ttk.Notebook(root)
+        notebook.grid(row=0, column=0, sticky="nsew")
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
+
+        calculator_tab = ttk.Frame(notebook)
+        structure_tab = ttk.Frame(notebook)
+        credits_tab = ttk.Frame(notebook)
+        notebook.add(calculator_tab, text="Calculator")
+        notebook.add(structure_tab, text="Structure")
+        notebook.add(credits_tab, text="Credits")
+
+        container = ttk.Frame(calculator_tab, padding=10)
+        container.grid(row=0, column=0, sticky="nsew")
+        calculator_tab.columnconfigure(0, weight=1)
+        calculator_tab.rowconfigure(0, weight=1)
         container.columnconfigure(0, weight=1)
-        container.columnconfigure(1, weight=2)
         container.rowconfigure(0, weight=1)
 
-        self.inputs_frame = ttk.Frame(container)
-        self.inputs_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        self.inputs_frame.columnconfigure(1, weight=1)
+        # Draggable sash between the inputs and results panels, so either
+        # side can be resized independently instead of the whole window
+        # scaling both together.
+        content_pane = ttk.Panedwindow(container, orient="horizontal")
+        content_pane.grid(row=0, column=0, sticky="nsew")
 
-        results_frame = ttk.Frame(container)
-        results_frame.grid(row=0, column=1, sticky="nsew")
+        # The inputs pane scrolls vertically since dragging the sash can
+        # make it narrower/shorter than the input list needs.
+        inputs_outer = ttk.Frame(content_pane)
+        inputs_outer.columnconfigure(0, weight=1)
+        inputs_outer.rowconfigure(0, weight=1)
+        content_pane.add(inputs_outer, weight=1)
+
+        inputs_canvas = tk.Canvas(inputs_outer, highlightthickness=0)
+        inputs_canvas.grid(row=0, column=0, sticky="nsew")
+        inputs_scrollbar = ttk.Scrollbar(inputs_outer, orient="vertical", command=inputs_canvas.yview)
+        inputs_scrollbar.grid(row=0, column=1, sticky="ns")
+        inputs_canvas.configure(yscrollcommand=inputs_scrollbar.set)
+
+        self.inputs_frame = ttk.Frame(inputs_canvas)
+        self.inputs_frame.columnconfigure(1, weight=1)
+        inputs_window = inputs_canvas.create_window((0, 0), window=self.inputs_frame, anchor="nw")
+
+        def _on_inputs_frame_configure(_event=None):
+            inputs_canvas.configure(scrollregion=inputs_canvas.bbox("all"))
+
+        def _on_inputs_canvas_configure(event):
+            inputs_canvas.itemconfigure(inputs_window, width=event.width)
+
+        self.inputs_frame.bind("<Configure>", _on_inputs_frame_configure)
+        inputs_canvas.bind("<Configure>", _on_inputs_canvas_configure)
+
+        def _on_inputs_mousewheel(event):
+            delta = -1 if event.num == 5 else 1
+            if hasattr(event, "delta") and event.delta:
+                delta = -1 if event.delta > 0 else 1
+            inputs_canvas.yview_scroll(delta, "units")
+
+        def _bind_inputs_mousewheel(_event=None):
+            inputs_canvas.bind_all("<MouseWheel>", _on_inputs_mousewheel)
+            inputs_canvas.bind_all("<Button-4>", _on_inputs_mousewheel)
+            inputs_canvas.bind_all("<Button-5>", _on_inputs_mousewheel)
+
+        def _unbind_inputs_mousewheel(_event=None):
+            inputs_canvas.unbind_all("<MouseWheel>")
+            inputs_canvas.unbind_all("<Button-4>")
+            inputs_canvas.unbind_all("<Button-5>")
+
+        inputs_canvas.bind("<Enter>", _bind_inputs_mousewheel)
+        inputs_canvas.bind("<Leave>", _unbind_inputs_mousewheel)
+
+        results_frame = ttk.Frame(content_pane)
         results_frame.columnconfigure(0, weight=1)
         results_frame.columnconfigure(1, weight=1)
         self._build_results(results_frame)
+        content_pane.add(results_frame, weight=2)
 
         self.mod_efficiency_mode.trace_add("write", self._clear_results)
         self.include_out_coupler.trace_add("write", self._clear_results)
         self.mmi_access_mode.trace_add("write", self._clear_results)
         self.mmi_length_mode.trace_add("write", self._clear_results)
+        self.recomb_length_mode.trace_add("write", self._clear_results)
+        self.alpha_source_mode.trace_add("write", self._clear_results)
 
         self._build_inputs()
 
         button_row = ttk.Frame(container)
-        button_row.grid(row=1, column=0, columnspan=2, pady=10)
+        button_row.grid(row=1, column=0, pady=10)
         ttk.Button(button_row, text="Calculate", command=self.calculate).grid(
             row=0, column=0, padx=(0, 6)
         )
@@ -89,6 +156,144 @@ class PowerBudgetGUI:
         ttk.Button(button_row, text="3D parameter sweep", command=self._open_3d_sweep_window).grid(
             row=0, column=3
         )
+
+        self._build_structure_tab(structure_tab)
+        self._build_credits_tab(credits_tab)
+
+    def _build_structure_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+        frame = ttk.Frame(parent, padding=10)
+        frame.grid(row=0, column=0, sticky="nsew")
+        self._add_scaling_image(frame, "MMI.png")
+
+    def _build_credits_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+        frame = ttk.Frame(parent, padding=20)
+        frame.grid(row=0, column=0, sticky="new")
+        frame.columnconfigure(0, weight=1)
+
+        self._add_half_width_image(frame, "LRL Logo - XXXL.png")
+
+        fields = ttk.Frame(frame)
+        fields.grid(row=1, column=0, sticky="w", pady=(20, 0))
+
+        bold_f = ("TkDefaultFont", 10, "bold")
+        metadata = [
+            ("Author:", "Lucas Zhang", "v_author"),
+            ("Title:", "LITE (Lightweight Interconnect Testing Environment)", "v_title"),
+            ("Affiliation:", "Light Wave Research Laboratory @ Columbia University\nActon Boxborough Regional High school", "v_affiliation"),
+            ("Version:", "1.0.0", "v_version"),
+            ("Date released:", "TBD", "v_date")
+        ]
+
+        for i, (label_text, value_text, var_name) in enumerate(metadata):
+            sticky_val = "nw" if i == 2 else "w"
+            ttk.Label(fields, text=label_text, font=bold_f).grid(row=i, column=0, sticky=sticky_val, pady=2)
+            lbl_val = ttk.Label(fields, text=value_text)
+            lbl_val.grid(row=i, column=1, sticky="w", pady=2, padx=(5, 0))
+            setattr(self, var_name, lbl_val)
+
+    def _add_credit_field(self, parent, row, label_text):
+        ttk.Label(parent, text=label_text).grid(row=row, column=0, sticky="w", pady=2)
+
+    def _add_half_width_image(self, parent, filename):
+        """Displays an image constrained to half the parent's current
+        width, anchored top-left, rescaling (preserving aspect ratio) as
+        the parent resizes."""
+        image_path = os.path.join(PICTURES_DIR, filename)
+        try:
+            img = Image.open(image_path)
+        except (FileNotFoundError, OSError) as exc:
+            print(f"[gui] Skipping image {filename!r}: {exc}")
+            return
+        orig_w, orig_h = img.size
+
+        label = ttk.Label(parent)
+        label.grid(row=0, column=0, sticky="nw")
+
+        state = {"photo": None, "last_width": None}
+
+        def redraw(_event=None):
+            total_width = parent.winfo_width()
+            if total_width < 20:
+                return
+            target_width = max(1, int(total_width * 0.5))
+            if state["last_width"] == target_width:
+                return
+            state["last_width"] = target_width
+            new_h = max(1, int(orig_h * (target_width / orig_w)))
+            resized = img.resize((target_width, new_h), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(resized)
+            state["photo"] = photo  # keep a reference -- avoids GC blanking the label
+            label.configure(image=photo)
+
+        parent.bind("<Configure>", redraw)
+        self.root.after_idle(redraw)
+
+    def _add_scaling_image(self, parent, filename):
+        """Displays an image that rescales (preserving aspect ratio) to fit
+        the parent frame's current size whenever the window is resized --
+        used for tabs whose content is essentially just the image, unlike
+        the calculator tab's fixed-width banner."""
+        image_path = os.path.join(PICTURES_DIR, filename)
+        try:
+            img = Image.open(image_path)
+        except (FileNotFoundError, OSError) as exc:
+            print(f"[gui] Skipping image {filename!r}: {exc}")
+            return
+        orig_w, orig_h = img.size
+
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+        label = ttk.Label(parent, anchor="center")
+        label.grid(row=0, column=0, sticky="nsew")
+
+        state = {"photo": None, "last_size": None}
+
+        def redraw(_event=None):
+            width = parent.winfo_width()
+            height = parent.winfo_height()
+            if width < 10 or height < 10:
+                return
+            scale = min(width / orig_w, height / orig_h)
+            new_w = max(1, int(orig_w * scale))
+            new_h = max(1, int(orig_h * scale))
+            if state["last_size"] == (new_w, new_h):
+                return
+            state["last_size"] = (new_w, new_h)
+            resized = img.resize((new_w, new_h), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(resized)
+            state["photo"] = photo  # keep a reference -- avoids GC blanking the label
+            label.configure(image=photo)
+
+        parent.bind("<Configure>", redraw)
+        self.root.after_idle(redraw)
+
+    def _add_image_banner(self, container, filename, row):
+        """Scales an image evenly to the container's natural (fully-laid-out)
+        width and places it at the given row."""
+        try:
+            self.root.update_idletasks()
+            target_width = container.winfo_reqwidth()
+
+            image_path = os.path.join(PICTURES_DIR, filename)
+            img = Image.open(image_path)
+            w, h = img.size
+            scaled_height = max(1, round(target_width * h / w))
+            img = img.resize((target_width, scaled_height), Image.LANCZOS)
+
+            # keep a reference on self -- PhotoImage is garbage collected
+            # otherwise, which would silently blank the label
+            photo = ImageTk.PhotoImage(img)
+            self._banner_photos = getattr(self, "_banner_photos", [])
+            self._banner_photos.append(photo)
+
+            banner = ttk.Label(container, image=photo)
+            banner.grid(row=row, column=0, pady=(10, 0))
+        except (FileNotFoundError, OSError) as exc:
+            print(f"[gui] Skipping image banner {filename!r}: {exc}")
 
     # ------------------------------------------------------------------
     # Input construction
@@ -158,6 +363,8 @@ class PowerBudgetGUI:
         row += 1
         self.v_alpha_out = self._add_output_row(parent, row, "Derived α (dB/cm):")
         row += 1
+        self.v_alpha_bulk_out = self._add_output_row(parent, row, "  core/clad bulk loss used (dB/cm):")
+        row += 1
         self.v_er_out = self._add_output_row(parent, row, "Derived ER (dB):")
         row += 1
         self.v_mmi_length_out = self._add_output_row(parent, row, "MMI length used (um):")
@@ -165,6 +372,10 @@ class PowerBudgetGUI:
         self.v_mmi_excess_out = self._add_output_row(parent, row, "MMI excess loss (dB):")
         row += 1
         self.v_mmi_modes_out = self._add_output_row(parent, row, "MMI guided modes:")
+        row += 1
+        self.v_recomb_length_out = self._add_output_row(parent, row, "Recomb MMI length used (um):")
+        row += 1
+        self.v_recomb_excess_out = self._add_output_row(parent, row, "Recomb MMI excess loss (dB):")
         row += 1
         self.v_cap_out = self._add_output_row(parent, row, "MZM capacitance (fF):")
         row += 1
@@ -212,6 +423,17 @@ class PowerBudgetGUI:
         row += 1
         self.v_core_height = self._add_field(row, "Core height (um):", "0.22")
         row += 1
+        alpha_source_label = ttk.Label(f, text="Bulk loss source:")
+        alpha_source_label.grid(row=row, column=0, sticky="w")
+        self._track(row, alpha_source_label)
+        alpha_source_menu = ttk.OptionMenu(
+            f, self.alpha_source_mode, self.alpha_source_mode.get(),
+            "From material data", "Manual", command=lambda _=None: self._refresh_alpha_fields()
+        )
+        alpha_source_menu.grid(row=row, column=1, sticky="e")
+        self._track(row, alpha_source_menu)
+        row += 1
+        self.alpha_manual_row = row
         self.v_alpha_core = self._add_field(row, "Core bulk loss (dB/cm):", "0.01")
         row += 1
         self.v_alpha_clad = self._add_field(row, "Cladding bulk loss (dB/cm):", "0.001")
@@ -260,7 +482,23 @@ class PowerBudgetGUI:
         row += 1
         self.v_splitting_ratio = self._add_field(row, "Splitting ratio γ (0.5 = ideal):", "0.48")
         row += 1
-        self.v_combiner_excess = self._add_field(row, "Combiner excess loss (dB):", "0.3")
+
+        row = self._add_section(row, "Recombination MMI")
+        self.v_recomb_width = self._add_field(row, "Width (um):", "2.0")
+        row += 1
+
+        recomb_length_mode_label = ttk.Label(f, text="Length:")
+        recomb_length_mode_label.grid(row=row, column=0, sticky="w")
+        self._track(row, recomb_length_mode_label)
+        recomb_length_menu = ttk.OptionMenu(
+            f, self.recomb_length_mode, self.recomb_length_mode.get(),
+            "Derived", "Custom", command=lambda _=None: self._refresh_recomb_fields()
+        )
+        recomb_length_menu.grid(row=row, column=1, sticky="e")
+        self._track(row, recomb_length_menu)
+        row += 1
+        self.recomb_custom_length_row = row
+        self.v_recomb_custom_length = self._add_field(row, "Custom length (um):", "10.0")
         row += 1
 
         row = self._add_section(row, "Photodetector")
@@ -295,6 +533,8 @@ class PowerBudgetGUI:
         self._refresh_mod_eff_fields()
         self._refresh_out_coupler_fields()
         self._refresh_mmi_fields()
+        self._refresh_recomb_fields()
+        self._refresh_alpha_fields()
 
     def _set_rows_visible(self, start, end, visible):
         for r in range(start, end):
@@ -318,6 +558,14 @@ class PowerBudgetGUI:
                                 self.mmi_access_mode.get() == "Tapered")
         self._set_rows_visible(self.mmi_custom_length_row, self.mmi_custom_length_row + 1,
                                 self.mmi_length_mode.get() == "Custom")
+
+    def _refresh_recomb_fields(self):
+        self._set_rows_visible(self.recomb_custom_length_row, self.recomb_custom_length_row + 1,
+                                self.recomb_length_mode.get() == "Custom")
+
+    def _refresh_alpha_fields(self):
+        self._set_rows_visible(self.alpha_manual_row, self.alpha_manual_row + 2,
+                                self.alpha_source_mode.get() == "Manual")
 
     # ------------------------------------------------------------------
     # Calculation
@@ -846,8 +1094,10 @@ class PowerBudgetGUI:
             self.budget_tree.delete(item)
         for var in (self.v_out_power, self.v_total_loss, self.v_photocurrent,
                     self.v_mod_eff, self.v_available_power, self.v_power_budget,
-                    self.v_confinement, self.v_n_eff, self.v_alpha_out, self.v_er_out,
+                    self.v_confinement, self.v_n_eff, self.v_alpha_out,
+                    self.v_alpha_bulk_out, self.v_er_out,
                     self.v_mmi_length_out, self.v_mmi_excess_out, self.v_mmi_modes_out,
+                    self.v_recomb_length_out, self.v_recomb_excess_out,
                     self.v_cap_out, self.v_laser_electrical_out):
             var.set("—")
         self.error_var.set("")
@@ -878,6 +1128,7 @@ class PowerBudgetGUI:
             "n_clad": self._f(self.v_n_clad),
             "core_width": self._f(self.v_core_width),
             "core_height": self._f(self.v_core_height),
+            "alpha_source_mode": self.alpha_source_mode.get(),
             "alpha_core": self._f(self.v_alpha_core),
             "alpha_clad": self._f(self.v_alpha_clad),
             "length1": self._f(self.v_length1),
@@ -890,7 +1141,9 @@ class PowerBudgetGUI:
             "mmi_custom_length": self._f(self.v_mmi_custom_length),
             "mod_length": self._f(self.v_mod_length),
             "splitting_ratio": self._f(self.v_splitting_ratio),
-            "combiner_excess": self._f(self.v_combiner_excess),
+            "recomb_width": self._f(self.v_recomb_width),
+            "recomb_length_mode": self.recomb_length_mode.get(),
+            "recomb_custom_length": self._f(self.v_recomb_custom_length),
             "responsivity": self._f(self.v_responsivity),
             "sensitivity": self._f(self.v_sensitivity),
             "mod_mode": self.mod_efficiency_mode.get(),
@@ -907,7 +1160,13 @@ class PowerBudgetGUI:
         confinement, n_eff = pb.strip_confinement(
             p["n_core"], p["n_clad"], p["core_width"], p["core_height"], wavelength_um
         )
-        alpha = pb.material_loss_db_per_cm(confinement, p["alpha_core"], p["alpha_clad"])
+        if p["alpha_source_mode"] == "From material data":
+            alpha_core = pb.material_bulk_loss_db_per_cm("Si", wavelength_um)
+            alpha_clad = pb.material_bulk_loss_db_per_cm("SiO2", wavelength_um)
+        else:
+            alpha_core = p["alpha_core"]
+            alpha_clad = p["alpha_clad"]
+        alpha = pb.material_loss_db_per_cm(confinement, alpha_core, alpha_clad)
 
         # Round to the nearest even integer (min 2) so sweeps that pass
         # continuous/odd values still land on a valid MZM-pairable port count.
@@ -934,9 +1193,24 @@ class PowerBudgetGUI:
         er_db = pb.er_db_from_splitting_ratio(p["splitting_ratio"])
         l_er_penalty = pb.er_power_penalty_db(er_db)
 
+        # Recombination MMI: each MZM recombines exactly its own 2 arms, so
+        # this is always a fixed 2-port device, mirroring the splitter MMI's
+        # own physics (same numerical self-imaging search, not a flat scalar).
+        if p["recomb_length_mode"] == "Derived":
+            recomb_length, recomb_excess, recomb_num_modes = pb.mmi_derive_length_and_loss(
+                n_eff_vertical, p["n_clad"], p["recomb_width"], 2, p["core_width"], wavelength_um
+            )
+        else:
+            recomb_length = p["recomb_custom_length"]
+            recomb_excess, recomb_num_modes = pb.mmi_excess_loss_db(
+                n_eff_vertical, p["n_clad"], p["recomb_width"], 2, p["core_width"],
+                wavelength_um, recomb_length
+            )
+        l_recomb_mmi = pb.mmi_total_loss_db(2, recomb_excess)
+
         stages = pb.compute_results(
             p["p_laser"], p["l_in"], l_prop1, l_mmi, l_prop2,
-            l_mod_il, l_er_penalty, p["combiner_excess"], p["l_out"]
+            l_mod_il, l_er_penalty, l_recomb_mmi, p["l_out"]
         )
 
         p_pd_dbm = stages[-2][1]  # power at photodetector, before the total-loss entry
@@ -966,10 +1240,15 @@ class PowerBudgetGUI:
             "confinement": confinement,
             "n_eff": n_eff,
             "alpha": alpha,
+            "alpha_core_used": alpha_core,
+            "alpha_clad_used": alpha_clad,
             "er_db": er_db,
             "mmi_length": mmi_length,
             "mmi_excess": mmi_excess,
             "mmi_num_modes": num_modes,
+            "recomb_length": recomb_length,
+            "recomb_excess": recomb_excess,
+            "recomb_num_modes": recomb_num_modes,
             "cap_fF": cap_fF,
             "laser_electrical_w": laser_electrical_w,
         }
@@ -989,10 +1268,15 @@ class PowerBudgetGUI:
         self.v_confinement.set(f"{result['confinement']:.4f}")
         self.v_n_eff.set(f"{result['n_eff']:.4f}")
         self.v_alpha_out.set(f"{result['alpha']:.4f}")
+        self.v_alpha_bulk_out.set(
+            f"{result['alpha_core_used']:.6g} / {result['alpha_clad_used']:.6g}"
+        )
         self.v_er_out.set(f"{result['er_db']:.3f}")
         self.v_mmi_length_out.set(f"{result['mmi_length']:.4f}")
         self.v_mmi_excess_out.set(f"{result['mmi_excess']:.4f}")
         self.v_mmi_modes_out.set(str(result["mmi_num_modes"]))
+        self.v_recomb_length_out.set(f"{result['recomb_length']:.4f}")
+        self.v_recomb_excess_out.set(f"{result['recomb_excess']:.4f}")
         self.v_cap_out.set(f"{result['cap_fF']:.4f}" if result["cap_fF"] is not None else "n/a (Power mode)")
         self.v_laser_electrical_out.set(f"{result['laser_electrical_w']:.4f}")
 
