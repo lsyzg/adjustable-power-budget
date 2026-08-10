@@ -114,22 +114,29 @@ _MATERIAL_NK_TABLES = {
 }
 
 
-def _interp_k(nk_table, wavelength_um):
-    # find refractive index for corresponding wavelength, nk set to closest wavelength
+def _interp_col(nk_table, wavelength_um, col):
+    # find value for corresponding wavelength, clamped to table endpoints
     if wavelength_um <= nk_table[0][0]:
-        return nk_table[0][2]
+        return nk_table[0][col]
     if wavelength_um >= nk_table[-1][0]:
-        return nk_table[-1][2]
-    for (wl0, _n0, k0), (wl1, _n1, k1) in zip(nk_table, nk_table[1:]):
+        return nk_table[-1][col]
+    for row0, row1 in zip(nk_table, nk_table[1:]):
+        wl0, wl1 = row0[0], row1[0]
         if wl0 <= wavelength_um <= wl1:
             t = (wavelength_um - wl0) / (wl1 - wl0)
-            return k0 + t * (k1 - k0)
-    return nk_table[-1][2]
+            return row0[col] + t * (row1[col] - row0[col])
+    return nk_table[-1][col]
+
+
+def material_refractive_index(material, wavelength_um):
+    # real refractive index n from materials_data.py
+    return _interp_col(_MATERIAL_NK_TABLES[material], wavelength_um, 1)
+
 
 # waveguide loss (basically negligible at c-band)
 def material_bulk_loss_db_per_cm(material, wavelength_um):
     # find bulk loss from table
-    k = _interp_k(_MATERIAL_NK_TABLES[material], wavelength_um)
+    k = _interp_col(_MATERIAL_NK_TABLES[material], wavelength_um, 2)
     alpha_np_per_um = 4 * math.pi * k / wavelength_um
     alpha_np_per_cm = alpha_np_per_um * 1e4
     return alpha_np_per_cm * 10 * math.log10(math.e)
