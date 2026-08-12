@@ -14,6 +14,7 @@ from matplotlib.figure import Figure
 from PIL import Image, ImageTk
 
 import power_budget as pb
+import structure
 
 PICTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pictures")
 
@@ -56,6 +57,7 @@ class PowerBudgetGUI:
         self._row_widgets = {}
 
         root.minsize(700, 500)
+        root.geometry("1700x1450")
 
         notebook = ttk.Notebook(root)
         notebook.grid(row=0, column=0, sticky="nsew")
@@ -165,7 +167,44 @@ class PowerBudgetGUI:
         parent.rowconfigure(0, weight=1)
         frame = ttk.Frame(parent, padding=10)
         frame.grid(row=0, column=0, sticky="nsew")
-        self._add_scaling_image(frame, "MMI.png")
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)  # static reference image
+        frame.rowconfigure(1, weight=2)  # live to-scale diagram
+        frame.rowconfigure(2, weight=0)  # render button
+
+        static_frame = ttk.Frame(frame)
+        static_frame.grid(row=0, column=0, sticky="nsew")
+        self._add_scaling_image(static_frame, "MMI.png")
+
+        canvas_frame = ttk.Frame(frame, relief="sunken", borderwidth=1)
+        canvas_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        canvas_frame.columnconfigure(0, weight=1)
+        canvas_frame.rowconfigure(0, weight=1)
+        self.structure_canvas = tk.Canvas(canvas_frame, background="white", highlightthickness=0)
+        self.structure_canvas.grid(row=0, column=0, sticky="nsew")
+
+        structure_button_row = ttk.Frame(frame)
+        structure_button_row.grid(row=2, column=0, pady=10)
+        ttk.Button(structure_button_row, text="Render", command=self._render_structure).grid(row=0, column=0)
+        self.structure_error_var = tk.StringVar(value="")
+        ttk.Label(structure_button_row, textvariable=self.structure_error_var, foreground="red").grid(
+            row=0, column=1, padx=(10, 0)
+        )
+
+    def _render_structure(self):
+        self.structure_error_var.set("")
+        try:
+            params = self._current_params()
+            result = self._compute(params)
+        except (tk.TclError, ValueError) as exc:
+            self.structure_error_var.set(f"Input error: {exc}")
+            return
+        except ZeroDivisionError:
+            self.structure_error_var.set("Input error: division by zero")
+            return
+
+        structure.draw_structure(self.structure_canvas, params, result)
+        self.structure_canvas.configure(scrollregion=self.structure_canvas.bbox("all"))
 
     def _build_credits_tab(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -361,25 +400,27 @@ class PowerBudgetGUI:
         row += 1
         self.v_n_eff = self._add_output_row(parent, row, "Effective index:")
         row += 1
+        self.v_n_bulk_out = self._add_output_row(parent, row, "  core/clad index:")
+        row += 1
         self.v_alpha_out = self._add_output_row(parent, row, "Derived α (dB/cm):")
         row += 1
-        self.v_alpha_bulk_out = self._add_output_row(parent, row, "  core/clad bulk loss used (dB/cm):")
+        self.v_alpha_bulk_out = self._add_output_row(parent, row, "  core/clad bulk loss (dB/cm):")
         row += 1
         self.v_er_out = self._add_output_row(parent, row, "Derived ER (dB):")
         row += 1
-        self.v_mmi_length_out = self._add_output_row(parent, row, "MMI length used (um):")
+        self.v_mmi_length_out = self._add_output_row(parent, row, "MMI length (um):")
         row += 1
         self.v_mmi_excess_out = self._add_output_row(parent, row, "MMI excess loss (dB):")
         row += 1
         self.v_mmi_modes_out = self._add_output_row(parent, row, "MMI guided modes:")
         row += 1
-        self.v_recomb_length_out = self._add_output_row(parent, row, "Recomb MMI length used (um):")
+        self.v_recomb_length_out = self._add_output_row(parent, row, "Recomb MMI length (um):")
         row += 1
         self.v_recomb_excess_out = self._add_output_row(parent, row, "Recomb MMI excess loss (dB):")
         row += 1
         self.v_cap_out = self._add_output_row(parent, row, "MZM capacitance (fF):")
         row += 1
-        self.v_laser_electrical_out = self._add_output_row(parent, row, "Laser electrical power (W):")
+        self.v_laser_electrical_out = self._add_output_row(parent, row, "Laser power (W):")
         row += 1
 
         self.error_var = tk.StringVar(value="")
@@ -415,28 +456,28 @@ class PowerBudgetGUI:
         row = self._add_section(row, "Waveguide")
         self.v_wavelength = self._add_field(row, "Wavelength (nm):", "1550")
         row += 1
-        self.v_n_core = self._add_field(row, "Core index:", "3.45")
-        row += 1
-        self.v_n_clad = self._add_field(row, "Cladding index:", "1.44")
-        row += 1
-        self.v_core_width = self._add_field(row, "Core width (um):", "0.48")
-        row += 1
-        self.v_core_height = self._add_field(row, "Core height (um):", "0.22")
-        row += 1
-        alpha_source_label = ttk.Label(f, text="Bulk loss source:")
+        alpha_source_label = ttk.Label(f, text="Index/loss source:")
         alpha_source_label.grid(row=row, column=0, sticky="w")
         self._track(row, alpha_source_label)
         alpha_source_menu = ttk.OptionMenu(
             f, self.alpha_source_mode, self.alpha_source_mode.get(),
-            "From material data", "Manual", command=lambda _=None: self._refresh_alpha_fields()
+            "From data", "Manual", command=lambda _=None: self._refresh_alpha_fields()
         )
         alpha_source_menu.grid(row=row, column=1, sticky="e")
         self._track(row, alpha_source_menu)
         row += 1
         self.alpha_manual_row = row
+        self.v_n_core = self._add_field(row, "Core index:", "3.45")
+        row += 1
+        self.v_n_clad = self._add_field(row, "Cladding index:", "1.44")
+        row += 1
         self.v_alpha_core = self._add_field(row, "Core bulk loss (dB/cm):", "0.01")
         row += 1
         self.v_alpha_clad = self._add_field(row, "Cladding bulk loss (dB/cm):", "0.001")
+        row += 1
+        self.v_core_width = self._add_field(row, "Core width (um):", "0.48")
+        row += 1
+        self.v_core_height = self._add_field(row, "Core height (um):", "0.22")
         row += 1
         self.v_length1 = self._add_field(row, "Length before MMI (um):", "5")
         row += 1
@@ -564,7 +605,7 @@ class PowerBudgetGUI:
                                 self.recomb_length_mode.get() == "Custom")
 
     def _refresh_alpha_fields(self):
-        self._set_rows_visible(self.alpha_manual_row, self.alpha_manual_row + 2,
+        self._set_rows_visible(self.alpha_manual_row, self.alpha_manual_row + 4,
                                 self.alpha_source_mode.get() == "Manual")
 
     # ------------------------------------------------------------------
@@ -1094,7 +1135,7 @@ class PowerBudgetGUI:
             self.budget_tree.delete(item)
         for var in (self.v_out_power, self.v_total_loss, self.v_photocurrent,
                     self.v_mod_eff, self.v_available_power, self.v_power_budget,
-                    self.v_confinement, self.v_n_eff, self.v_alpha_out,
+                    self.v_confinement, self.v_n_eff, self.v_n_bulk_out, self.v_alpha_out,
                     self.v_alpha_bulk_out, self.v_er_out,
                     self.v_mmi_length_out, self.v_mmi_excess_out, self.v_mmi_modes_out,
                     self.v_recomb_length_out, self.v_recomb_excess_out,
@@ -1157,32 +1198,37 @@ class PowerBudgetGUI:
         """Pure calculation from a params dict -> result dict. No widget access,
         so this can be reused for both the normal Calculate button and sweeps."""
         wavelength_um = p["wavelength_nm"] / 1000
-        confinement, n_eff = pb.strip_confinement(
-            p["n_core"], p["n_clad"], p["core_width"], p["core_height"], wavelength_um
-        )
         if p["alpha_source_mode"] == "From material data":
+            n_core = pb.material_refractive_index("Si", wavelength_um)
+            n_clad = pb.material_refractive_index("SiO2", wavelength_um)
             alpha_core = pb.material_bulk_loss_db_per_cm("Si", wavelength_um)
             alpha_clad = pb.material_bulk_loss_db_per_cm("SiO2", wavelength_um)
         else:
+            n_core = p["n_core"]
+            n_clad = p["n_clad"]
             alpha_core = p["alpha_core"]
             alpha_clad = p["alpha_clad"]
+
+        confinement, n_eff = pb.strip_confinement(
+            n_core, n_clad, p["core_width"], p["core_height"], wavelength_um
+        )
         alpha = pb.material_loss_db_per_cm(confinement, alpha_core, alpha_clad)
 
         # Round to the nearest even integer (min 2) so sweeps that pass
         # continuous/odd values still land on a valid MZM-pairable port count.
         n_ports = max(2, int(round(p["n_ports"] / 2)) * 2)
         num_mzms = pb.num_mzms(n_ports)
-        _, n_eff_vertical = pb.slab_mode(p["n_core"], p["n_clad"], p["core_height"], wavelength_um)
+        _, n_eff_vertical = pb.slab_mode(n_core, n_clad, p["core_height"], wavelength_um)
         access_width = p["taper_width"] if p["mmi_access_mode"] == "Tapered" else p["core_width"]
 
         if p["mmi_length_mode"] == "Derived":
             mmi_length, mmi_excess, num_modes = pb.mmi_derive_length_and_loss(
-                n_eff_vertical, p["n_clad"], p["mmi_width"], n_ports, access_width, wavelength_um
+                n_eff_vertical, n_clad, p["mmi_width"], n_ports, access_width, wavelength_um
             )
         else:
             mmi_length = p["mmi_custom_length"]
             mmi_excess, num_modes = pb.mmi_excess_loss_db(
-                n_eff_vertical, p["n_clad"], p["mmi_width"], n_ports, access_width,
+                n_eff_vertical, n_clad, p["mmi_width"], n_ports, access_width,
                 wavelength_um, mmi_length
             )
 
@@ -1198,12 +1244,12 @@ class PowerBudgetGUI:
         # own physics (same numerical self-imaging search, not a flat scalar).
         if p["recomb_length_mode"] == "Derived":
             recomb_length, recomb_excess, recomb_num_modes = pb.mmi_derive_length_and_loss(
-                n_eff_vertical, p["n_clad"], p["recomb_width"], 2, p["core_width"], wavelength_um
+                n_eff_vertical, n_clad, p["recomb_width"], 2, p["core_width"], wavelength_um
             )
         else:
             recomb_length = p["recomb_custom_length"]
             recomb_excess, recomb_num_modes = pb.mmi_excess_loss_db(
-                n_eff_vertical, p["n_clad"], p["recomb_width"], 2, p["core_width"],
+                n_eff_vertical, n_clad, p["recomb_width"], 2, p["core_width"],
                 wavelength_um, recomb_length
             )
         l_recomb_mmi = pb.mmi_total_loss_db(2, recomb_excess)
@@ -1239,6 +1285,8 @@ class PowerBudgetGUI:
             "power_budget": power_budget,
             "confinement": confinement,
             "n_eff": n_eff,
+            "n_core_used": n_core,
+            "n_clad_used": n_clad,
             "alpha": alpha,
             "alpha_core_used": alpha_core,
             "alpha_clad_used": alpha_clad,
@@ -1267,6 +1315,9 @@ class PowerBudgetGUI:
         self.v_power_budget.set(f"{result['power_budget']:.3f}")
         self.v_confinement.set(f"{result['confinement']:.4f}")
         self.v_n_eff.set(f"{result['n_eff']:.4f}")
+        self.v_n_bulk_out.set(
+            f"{result['n_core_used']:.6g} / {result['n_clad_used']:.6g}"
+        )
         self.v_alpha_out.set(f"{result['alpha']:.4f}")
         self.v_alpha_bulk_out.set(
             f"{result['alpha_core_used']:.6g} / {result['alpha_clad_used']:.6g}"
