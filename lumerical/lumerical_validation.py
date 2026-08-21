@@ -3,11 +3,16 @@ import os
 from pathlib import Path
 import math
 import time
-import matplotlib.pyplot as plt
+import matplotlib
 from datetime import datetime
 
-# os.environ["QT_QPA_PLATFORM"] = "offscreen"
-# os.environ["DISPLAY"] = ""
+# uncomment when disowning
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+os.environ["DISPLAY"] = ""
+
+if os.environ.get("DISPLAY") == "":
+    matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 # Adjust paths to match your local installation layout
 sys.path.append("/opt/lumerical/v231/api/python/")
@@ -37,13 +42,13 @@ MOD_LENGTH_UM = 500.0
 # Waveguide width sweep (evenly spaced, inclusive of both endpoints)
 WIDTH_SWEEP_START_UM = 0.4
 WIDTH_SWEEP_STOP_UM = 0.6
-WIDTH_SWEEP_STEPS = 10
+WIDTH_SWEEP_STEPS = 50
 
 # MMI length sweep, as a fraction of the derived optimal self-imaging
 # length (absolute lengths aren't known until that's derived at runtime)
 LENGTH_SWEEP_START_FACTOR = 0.5
 LENGTH_SWEEP_STOP_FACTOR = 1.5
-LENGTH_SWEEP_STEPS = 5
+LENGTH_SWEEP_STEPS = 50
 
 
 def linspace(start, stop, steps):
@@ -73,7 +78,7 @@ def db_per_cm_to_k(alpha_db_per_cm, wavelength_um):
 
 
 # Initialize Lumerical Session with standard GUI visible
-mode = lumapi.MODE(hide=False)
+mode = lumapi.MODE(hide=True)
 
 # ---------------------------------------------------------------------------
 # Cross-check: Lumerical's own live Palik lookup vs. materials_data.py
@@ -133,15 +138,28 @@ def simulate_waveguide(width_um, height_um):
     # FDE Solver Region
     addfde;
     set('solver type', '2D Z normal');
-    set('x span', 5e-6);
-    set('y span', 2.5e-6);
+    set('x span', 10e-6);
+    set('y span', 4e-6);
     set('x', 0); set('y', 0); set('z', 0);
     set('background material', '<Object defined dielectric>');
     set('index', N_CLAD + 1i*k_clad);
     set('x min bc', 'PML'); set('x max bc', 'PML');
     set('y min bc', 'PML'); set('y max bc', 'PML');
     set('wavelength', wavelength);
-    set('number of trial modes', 5);
+    set('number of trial modes', 10);
+
+    addmesh;
+    set('name', 'mesh_wg');
+    set('x', 0); set('y', 0); set('z', 0);
+    set('x span', core_w + 1e-6);
+    set('y span', core_h + 1e-6);
+    set('z span', 10e-6);
+    set('override x mesh', true);
+    set('override y mesh', true);
+    set('override z mesh', false);
+    set('dx', 10e-9);
+    set('dy', 10e-9);
+    # set('dz', 5e-9);
 
     findmodes;
 
@@ -231,6 +249,9 @@ def analytical_waveguide(width_um, height_um):
 # ---------------------------------------------------------------------------
 
 def simulate_mmi_eme(mmi_length_um):
+
+    print('START - into mmi function now')
+
     mode.putv("WAVELENGTH_UM", float(WAVELENGTH_UM))
     mode.putv("ACCESS_WIDTH_UM", float(ACCESS_WIDTH_UM))
     mode.putv("CORE_HEIGHT_UM", float(CORE_HEIGHT_UM))
@@ -243,6 +264,7 @@ def simulate_mmi_eme(mmi_length_um):
     mode.putv("tap2_um", float(pb.mmi_tap_position(2, 2, MMI_WIDTH_UM)))
 
     script = """
+    into_mmi = 1;
     switchtolayout;
     selectall;
     delete;
@@ -297,22 +319,22 @@ def simulate_mmi_eme(mmi_length_um):
     set('x min', -access_len - mmi_len/2);
     set('y', 0); set('y span', mmi_w * 4.5); # Widen Y-span to reduce PML absorption boundary spikes
     set('y min bc', 'PML'); set('y max bc', 'PML');
-    set('z', 0); set('z span', wg_height * 4);
+    set('z', 0); set('z span', wg_height * 12);
     set('z min bc', 'PML'); set('z max bc', 'PML');
 
     # Cell Setup
     set('number of cell groups', 3);
     set('group spans', [access_len; mmi_len; access_len]);
-    set('cells', [1; 30; 1]);
+    set('cells', [1; 1; 1]);
 
     # Solver & Energy Conservation
     select("EME");
     set("allow custom eigensolver settings", 1);
-    set("energy conservation", "conserve energy");
+    set("energy conservation", "make passive");
 
     # Trial Modes Setup
     select("EME::Cells::cell_1"); seteigensolver("number of trial modes", 10);
-    select("EME::Cells::cell_2"); seteigensolver("number of trial modes", 50);
+    select("EME::Cells::cell_2"); seteigensolver("number of trial modes", 100);
     select("EME::Cells::cell_3"); seteigensolver("number of trial modes", 10);
 
     # Ports
@@ -320,25 +342,35 @@ def simulate_mmi_eme(mmi_length_um):
 
     addemeport;
     set('port location', 'left');
-    set('use full simulation span', 0);
-    set('y', 0); set('y span', access_w * 3);
-    set('z', 0); set('z span', wg_height * 3);
+    set('use full simulation span', 1); 
     set('mode selection', 'fundamental TE mode');
 
     addemeport;
     set('port location', 'right');
     set('use full simulation span', 0);
-    set('y', tap1); set('y span', access_w * 3);
-    set('z', 0); set('z span', wg_height * 3);
+    set('y', tap1); set('y span', mmi_w * 2);
+    set('z', 0); set('z span', wg_height * 6);
     set('mode selection', 'fundamental TE mode');
 
     addemeport;
     set('port location', 'right');
     set('use full simulation span', 0);
-    set('y', tap2); set('y span', access_w * 3);
-    set('z', 0); set('z span', wg_height * 3);
+    set('y', tap2); set('y span', mmi_w * 2);
+    set('z', 0); set('z span', wg_height * 6);
     set('mode selection', 'fundamental TE mode');
+    
+    addmesh;
+    set('name', 'mesh_mmi');
+    set('based on a structure', 1);
+    set('structure', 'MMI');
+    # set("override x mesh", true);
+    set("override y mesh", true);
+    set("override z mesh", true);
+    # set("dx", 20e-9); 
+    set("dy", 20e-9);
+    set("dz", 10e-9);
 
+    save('mmi_validation.lms');
     # Run Eigensolver & Propagation
     run;
     select("EME");
@@ -469,7 +501,7 @@ if __name__ == "__main__":
     for ax, plot_fn in zip(axes_flat, panel_fns):
         plot_fn(ax)
 
-    fig.suptitle('power_budget.py Analytical Model vs Lumerical Simulation', fontsize=14, fontweight='bold')
+    fig.suptitle('Analytical Model vs Lumerical Simulation', fontsize=14, fontweight='bold')
 
     timing_lines = []
     if run_waveguide:
@@ -490,4 +522,6 @@ if __name__ == "__main__":
     plt.savefig(OUTPUT_PLOT_FILENAME, dpi=300)
     print(f"\nSummary plot saved successfully to '{OUTPUT_PLOT_FILENAME}'.")
     print(timing_label)
-    plt.show()
+    if matplotlib.get_backend().lower() != "agg":
+        plt.tight_layout()
+        plt.show()

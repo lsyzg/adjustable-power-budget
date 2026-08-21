@@ -86,7 +86,7 @@ def _slab_mode_field(y, kappa, gamma, thickness_um, even):
 
 
 def slab_mode(n_core, n_clad, thickness_um, wavelength_um):
-    # calculate confinement and neff from core and clad indices, thickness, wavelength
+    # calculate confinement and neff from core and clad indices, thickness, wavelength 
     k0 = 2 * math.pi / wavelength_um
     kappa_max = k0 * math.sqrt(n_core ** 2 - n_clad ** 2)
     kappa, gamma = _slab_branch_root(kappa_max, thickness_um, 0)
@@ -97,10 +97,16 @@ def slab_mode(n_core, n_clad, thickness_um, wavelength_um):
 
 
 def strip_confinement(n_core, n_clad, width_um, height_um, wavelength_um):
-    # effective index method to find confinement, solve for 1 axis, plug neff into other
-    confinement_v, n_eff_v = slab_mode(n_core, n_clad, height_um, wavelength_um)
-    confinement_h, n_eff_2d = slab_mode(n_eff_v, n_clad, width_um, wavelength_um)
-    return confinement_v * confinement_h, n_eff_2d
+    # effective index method to find confinement, solve for 1 axis, plug neff into other (average vertical and horizontal to fix assymetrical nature)
+    conf_v, n_eff_v = slab_mode(n_core, n_clad, height_um, wavelength_um)
+    conf_h_a, n_eff_a = slab_mode(n_eff_v, n_clad, width_um, wavelength_um)
+    confinement_a = conf_v * conf_h_a
+
+    conf_h, n_eff_h = slab_mode(n_core, n_clad, width_um, wavelength_um)
+    conf_v_b, n_eff_b = slab_mode(n_eff_h, n_clad, height_um, wavelength_um)
+    confinement_b = conf_h * conf_v_b
+
+    return (confinement_a + confinement_b) / 2, (n_eff_a + n_eff_b) / 2
 
 
 def material_loss_db_per_cm(confinement, alpha_core_db_per_cm, alpha_clad_db_per_cm):
