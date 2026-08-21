@@ -1,6 +1,8 @@
+import functools
 import math
 
 import materials_data
+import matrix_pb
 
 EPSILON_0 = 8.8541878128e-12
 
@@ -96,17 +98,23 @@ def slab_mode(n_core, n_clad, thickness_um, wavelength_um):
     return confinement, n_eff
 
 
+# EIM has an accuracy ceiling for near square, high index contrast geometry use vectorial instead
+_VECTORIAL_RESOLUTION_UM = 0.01
+_VECTORIAL_DOMAIN_SCALE = 10.0
+
+
+@functools.lru_cache(maxsize=256)
+def _vectorial_strip_mode(n_core, n_clad, width_um, height_um, wavelength_um):
+    result = matrix_pb.solve_mode_vectorial(
+        n_core, n_clad, width_um, height_um, wavelength_um,
+        domain_scale=_VECTORIAL_DOMAIN_SCALE, resolution_um=_VECTORIAL_RESOLUTION_UM,
+    )
+    return result["n_eff"], result["confinement_e2"]
+
+
 def strip_confinement(n_core, n_clad, width_um, height_um, wavelength_um):
-    # effective index method to find confinement, solve for 1 axis, plug neff into other (average vertical and horizontal to fix assymetrical nature)
-    conf_v, n_eff_v = slab_mode(n_core, n_clad, height_um, wavelength_um)
-    conf_h_a, n_eff_a = slab_mode(n_eff_v, n_clad, width_um, wavelength_um)
-    confinement_a = conf_v * conf_h_a
-
-    conf_h, n_eff_h = slab_mode(n_core, n_clad, width_um, wavelength_um)
-    conf_v_b, n_eff_b = slab_mode(n_eff_h, n_clad, height_um, wavelength_um)
-    confinement_b = conf_h * conf_v_b
-
-    return (confinement_a + confinement_b) / 2, (n_eff_a + n_eff_b) / 2
+    n_eff, confinement = _vectorial_strip_mode(n_core, n_clad, width_um, height_um, wavelength_um)
+    return confinement, n_eff
 
 
 def material_loss_db_per_cm(confinement, alpha_core_db_per_cm, alpha_clad_db_per_cm):
